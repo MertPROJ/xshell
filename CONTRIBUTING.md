@@ -16,17 +16,18 @@ Contributions are accepted under the [MIT License](./LICENSE).
 
 ## Getting started
 
-1. Fork the repository on GitHub.
-2. Clone your fork and install dependencies:
+1. Clone the repository and install dependencies:
    ```bash
-   git clone https://github.com/<your-username>/xshell.git
+   git clone https://github.com/MertPROJ/xshell.git
    cd xshell
    npm install
    ```
-3. Create a branch for your change:
+2. Create a branch for your change:
    ```bash
    git checkout -b feature/your-feature-name
    ```
+
+> If you're contributing from outside the project, fork the repo on GitHub first and clone your fork's URL instead.
 
 ### Prerequisites
 
