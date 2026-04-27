@@ -1,0 +1,1171 @@
+/* ── xshell Design System ─────────────────────────────────────────── */
+/* Warm-toned dark theme with parchment-tinted neutrals.               */
+
+:root {
+  /* Surfaces */
+  --bg-deep: #141413;
+  --bg-surface: #1c1c1b;
+  --bg-elevated: #242422;
+  --bg-card: #2a2a28;
+  --bg-hover: #32322f;
+  --bg-active: #3a3a37;
+
+  /* Text */
+  --text-primary: #faf9f5;
+  --text-secondary: #b0aea5;
+  --text-tertiary: #87867f;
+  --text-muted: #5e5d59;
+
+  /* Brand */
+  --accent-terracotta: #c96442;
+  --accent-coral: #d97757;
+  --accent-terracotta-dim: rgba(201, 100, 66, 0.15);
+
+  /* Borders */
+  --border-subtle: #2a2a28;
+  --border-default: #30302e;
+  --border-strong: #3a3a37;
+
+  /* Semantic */
+  --focus-ring: #3898ec;
+  --error: #b53333;
+  --success: #23a55a;
+
+  /* Spacing */
+  --ds-width: 64px;
+  --tab-height: 40px;
+
+  /* Typography */
+  --font-serif: Georgia, 'Times New Roman', serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Cascadia Code', 'Consolas', 'SF Mono', 'Monaco', monospace;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+}
+
+/* ── Light Theme ──────────────────────────────────────────────────── */
+/* Token-only override — every selector below uses var(--…), so flipping these is
+   sufficient to repaint the entire app. Mapped to DESIGN.md's warm light palette:
+   Parchment for the page bg, Ivory/White for surfaces, Border Cream/Warm Sand for
+   hover and active. Hover/active intentionally go DARKER on light (opposite of
+   dark, where they go lighter) — that's what reads as "highlighted" on a light bg.
+   Brand (terracotta/coral) and semantic colors (error, focus) carry over unchanged. */
+:root[data-theme="light"] {
+  --bg-deep: #f5f4ed;
+  --bg-surface: #faf9f5;
+  --bg-elevated: #ffffff;
+  --bg-card: #faf9f5;
+  --bg-hover: #f0eee6;
+  --bg-active: #e8e6dc;
+
+  --text-primary: #141413;
+  --text-secondary: #4d4c48;
+  --text-tertiary: #5e5d59;
+  --text-muted: #87867f;
+
+  --border-subtle: #f0eee6;
+  --border-default: #e8e6dc;
+  --border-strong: #d1cfc5;
+}
+
+/* ── Reset & Base ─────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root { height: 100%; overflow: hidden; }
+
+body { font-family: var(--font-sans); font-size: 13px; line-height: 1.45; color: var(--text-primary); background: var(--bg-deep); -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; user-select: none; -webkit-user-select: none; cursor: default; }
+
+/* Re-enable text selection only where it makes sense: form inputs, the terminal surface,
+   and any ad-hoc .selectable opt-in. Markdown content stays non-selectable to keep the
+   app feeling like a native desktop surface rather than a web page. */
+input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-select: text; -webkit-user-select: text; }
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* ── App Layout ───────────────────────────────────────────────────── */
+
+.app-layout { display: flex; height: 100%; overflow: hidden; }
+
+/* ── Discord-style Sidebar ─────────────────────────────────────────── */
+
+.discord-sidebar { width: var(--ds-width); background: var(--bg-surface); border-right: 1px solid var(--border-subtle); display: flex; flex-direction: column; align-items: center; padding: 10px 0; gap: 2px; flex-shrink: 0; transition: margin-left 0.28s cubic-bezier(.4, 0, .2, 1), transform 0.28s cubic-bezier(.4, 0, .2, 1), opacity 0.22s ease; }
+.app-layout.sidebar-collapsed .discord-sidebar { margin-left: calc(-1 * var(--ds-width)); transform: translateX(-12px); opacity: 0; pointer-events: none; }
+
+.ds-item { position: relative; width: 100%; display: flex; align-items: center; justify-content: center; padding: 3px 0; cursor: pointer; }
+
+.ds-icon { width: 42px; height: 42px; border-radius: 14px; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease; color: var(--text-tertiary); font-size: 12px; font-weight: 600; font-family: var(--font-sans); letter-spacing: -0.3px; user-select: none; }
+
+/* Home button is just the logo image, no state colors. The image carries the brand on
+   its own — switching the bg to terracotta on hover/active was leaking through the rounded
+   corner edges as a thin orange ring. The .ds-indicator side-bar still shows the active state. */
+.ds-home { background: transparent; color: var(--text-secondary); }
+.ds-home-logo { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; -webkit-user-drag: none; user-select: none; pointer-events: none; }
+
+.ds-project { background: var(--bg-card); }
+.ds-item:hover .ds-project { background: var(--bg-active); color: var(--text-primary); }
+.ds-item.active .ds-project { color: var(--text-primary); }
+
+.ds-add { background: var(--bg-card); color: var(--text-muted); }
+.ds-item:hover .ds-add { background: var(--accent-terracotta-dim); color: var(--accent-coral); }
+
+.ds-project-img { width: 100%; height: 100%; object-fit: cover; border-radius: 14px; -webkit-user-drag: none; user-select: none; pointer-events: none; }
+
+.ds-settings { background: var(--bg-card); color: var(--text-muted); width: 36px; height: 36px; border-radius: 10px; }
+.ds-item:hover .ds-settings { background: var(--bg-active); color: var(--text-secondary); }
+.ds-item.active .ds-settings { background: var(--accent-terracotta); color: var(--text-primary); }
+.ds-collapse-icon { background: transparent; color: var(--text-muted); width: 36px; height: 24px; border-radius: 8px; }
+.ds-item:hover .ds-collapse-icon { background: var(--bg-hover); color: var(--text-primary); }
+.ds-collapse { margin-bottom: 2px; }
+
+.ds-indicator { position: absolute; left: 0; top: 50%; width: 3px; height: 0; background: var(--text-primary); border-radius: 0 3px 3px 0; transform: translateY(-50%); transition: all 0.2s cubic-bezier(0.2, 0, 0, 1); }
+.ds-item:hover .ds-indicator { height: 16px; }
+.ds-item.active .ds-indicator { height: 32px; }
+.ds-item.linked .ds-indicator { height: 32px; background: var(--success); }
+.ds-item.linked .ds-project { border-radius: 14px; color: var(--text-primary); }
+
+/* Discord-style tooltip (fixed position, rendered outside scroll) */
+.ds-tooltip-fixed { position: fixed; transform: translateY(-50%); background: var(--bg-deep); color: var(--text-primary); font-size: 13px; font-weight: 500; padding: 6px 12px; border-radius: var(--radius-md); white-space: nowrap; pointer-events: none; z-index: 3000; box-shadow: 0 4px 12px rgba(0,0,0,0.4); border: 1px solid var(--border-default); animation: tooltipIn 0.12s ease; }
+.ds-tooltip-fixed::before { content: ''; position: absolute; right: 100%; top: 50%; transform: translateY(-50%); border: 5px solid transparent; border-right-color: var(--border-default); }
+.ds-tooltip-fixed::after { content: ''; position: absolute; right: 100%; top: 50%; transform: translateY(-50%); border: 4px solid transparent; border-right-color: var(--bg-deep); }
+@keyframes tooltipIn { from { opacity: 0; transform: translateY(-50%) translateX(-4px); } to { opacity: 1; transform: translateY(-50%) translateX(0); } }
+
+/* Pointer-based drag states */
+.ds-item { touch-action: none; user-select: none; -webkit-user-select: none; }
+
+/* Active-session badge (Discord-style) — anchored to the icon's right edge (not the item's),
+   so it sits correctly whether the item is top-level or inside a narrower folder bubble. */
+.ds-active-badge { position: absolute; bottom: 0; right: calc(50% - 21px); min-width: 18px; height: 18px; background: var(--success); color: #fff; font-size: 10px; font-weight: 700; border-radius: 9px; display: flex; align-items: center; justify-content: center; border: 2px solid var(--bg-surface); padding: 0 5px; z-index: 2; box-shadow: 0 1px 3px rgba(0,0,0,0.3); pointer-events: none; }
+.ds-dragging { opacity: 0.3; transform: scale(0.92); }
+.ds-drop-line { position: absolute; left: 12px; right: 12px; height: 2px; background: var(--accent-terracotta); border-radius: 1px; pointer-events: none; box-shadow: 0 0 6px var(--accent-terracotta); }
+.ds-drop-line-before { top: -1px; }
+.ds-drop-line-after { bottom: -1px; }
+
+.ds-separator { width: 28px; height: 2px; background: var(--border-default); border-radius: 1px; margin: 3px 0; flex-shrink: 0; }
+
+/* gap: 0 is deliberate — any spacing between items must be INSIDE an item's box (padding)
+   or INSIDE a folder's padding so the pointer always hits a data-drop-kind element.
+   Otherwise the sliver of flex gap between items is a dead zone → drop target flickers off. */
+.ds-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 0; width: 100%; min-height: 0; padding: 2px 0; }
+.ds-scroll::-webkit-scrollbar { width: 0; }
+
+/* ── Sidebar folders (Discord-style) ─────────────────────────────── */
+
+.ds-flow { display: flex; flex-direction: column; align-items: center; width: 100%; }
+
+/* No outer bubble around the folder — the header pill IS the bubble (mini-grid inside).
+   Padding provides vertical spacing but stays inside the folder's data-drop-kind area so
+   dragging between siblings never lands on a dead zone. */
+.ds-folder { width: 100%; position: relative; padding: 3px 0; transition: background 0.18s ease, box-shadow 0.18s ease; }
+
+/* The single dark bubble: 42×42 rounded square, dark background, mini-grid inside when
+   collapsed / folder icon when expanded. Same look in both states. */
+.ds-folder-header { position: relative; width: 42px; height: 42px; margin: 0 auto; border-radius: 14px; background: var(--bg-deep); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.15s, transform 0.15s; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+.ds-folder-header:hover { background: var(--bg-active); }
+
+/* Merge highlight — a glowing ring around the icon, NOT a rectangle around the item.
+   Applies to projects (hover-in-middle-zone) and collapsed folders. */
+.ds-item.ds-merge-target .ds-icon,
+.ds-folder-header.ds-merge-target { box-shadow: 0 0 0 2px var(--accent-terracotta), 0 0 10px rgba(201, 100, 66, 0.5); transform: scale(1.06); }
+
+/* Expanded folder as merge target: since there's no visible bubble at rest, show one just
+   for this interaction — subtle terracotta tint + ring around the whole folder area. */
+.ds-folder.ds-folder-merge-target { background: color-mix(in oklab, var(--accent-terracotta) 10%, transparent); border-radius: 18px; box-shadow: 0 0 0 2px var(--accent-terracotta), 0 0 12px rgba(201, 100, 66, 0.35) inset; }
+
+.ds-folder-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 2px; width: 34px; height: 34px; }
+.ds-icon-mini { width: 16px; height: 16px; border-radius: 5px; background: var(--bg-card); display: flex; align-items: center; justify-content: center; font-size: 7px; font-weight: 700; color: var(--text-tertiary); overflow: hidden; letter-spacing: 0; }
+.ds-icon-mini .ds-project-img { border-radius: 5px; }
+.ds-icon-mini-empty { background: transparent; }
+
+.ds-folder-open-icon { color: var(--accent-terracotta); display: flex; align-items: center; justify-content: center; }
+
+/* Discord-style custom color: folder icon takes the color directly, header + expanded
+   body-wrap get a low-opacity tint of the same color. The tint is mixed into bg-deep so
+   it still reads as a dark bubble — just tinted — instead of a flat bright color. */
+.ds-folder-colored .ds-folder-header { background: color-mix(in oklab, var(--folder-color) 22%, var(--bg-deep)); }
+.ds-folder-colored .ds-folder-header:hover { background: color-mix(in oklab, var(--folder-color) 34%, var(--bg-deep)); }
+.ds-folder-colored .ds-folder-open-icon { color: var(--folder-color); }
+.ds-folder-colored.ds-folder-open .ds-folder-body-wrap { background: color-mix(in oklab, var(--folder-color) 22%, var(--bg-deep)); }
+
+/* Folder body uses the grid-template-rows 0fr→1fr trick for smooth expand/collapse.
+   The dark "bubble" visual around the expanded children lives on the body-wrap itself —
+   it appears when the folder opens, disappears when it closes. */
+.ds-folder-body-wrap { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 0.28s cubic-bezier(.4, 0, .2, 1); width: 100%; }
+.ds-folder-body-wrap.collapsed { grid-template-rows: 0fr; }
+.ds-folder-open .ds-folder-body-wrap { background: var(--bg-deep); margin: 2px 6px 0; border-radius: 14px; width: calc(100% - 12px); }
+/* min-height: 0 is critical — grid items default to min-height: auto, which refuses to
+   shrink below content size, which means `grid-template-rows: 0fr` would be silently
+   ignored and children (a 48px project row) would stay visible as a "line" under the
+   collapsed folder. Also padding lives on the OPEN bubble only so nothing leaks when
+   the folder is closed. `overflow: clip` clips vertically (for collapse) but we also set
+   overflow-x: visible so the selection-stripe indicator can extend left past the bubble. */
+.ds-folder-body { min-height: 0; overflow-y: clip; overflow-x: visible; display: flex; flex-direction: column; align-items: center; gap: 0; width: 100%; }
+.ds-folder-open .ds-folder-body { padding: 4px 0; }
+
+/* Projects inside an expanded folder: shift the selection stripe left by the folder
+   bubble's margin so it touches the sidebar's true left edge (same as top-level projects),
+   instead of sitting inside the bubble. */
+.ds-folder-open .ds-folder-body .ds-item .ds-indicator { left: -6px; }
+
+/* Standalone drop indicator shown at the very bottom (end-of-list insert). */
+.ds-drop-line-standalone { width: 34px; height: 3px; margin: 2px auto; background: var(--accent-terracotta); border-radius: 2px; box-shadow: 0 0 6px var(--accent-terracotta); }
+.ds-drop-line-folder { position: static; width: 34px; margin: 2px auto; }
+
+/* Floating drag ghost — positioned via transform (updated directly in the pointermove
+   handler, not via React state) so the background stays visible and nothing flickers. */
+.ds-drag-ghost { position: fixed; top: 0; left: 0; pointer-events: none; z-index: 3500; opacity: 0.55; filter: drop-shadow(0 6px 12px rgba(0,0,0,0.5)); will-change: transform; }
+
+/* ── Main Content Area ────────────────────────────────────────────── */
+
+.main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+
+/* ── Tab Bar / Title Bar ──────────────────────────────────────────── */
+
+.tab-bar { height: var(--tab-height); background: var(--bg-surface); border-bottom: 1px solid var(--border-subtle); display: flex; align-items: stretch; flex-shrink: 0; }
+
+/* Expand-sidebar button (appears when sidebar is collapsed) */
+.tb-expand-sidebar { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 0; padding: 0; background: transparent; border: none; color: var(--text-muted); cursor: pointer; opacity: 0; overflow: hidden; transition: width 0.26s cubic-bezier(.4, 0, .2, 1), opacity 0.2s ease, color 0.12s, background 0.12s; }
+.tb-expand-sidebar.show { width: 30px; opacity: 1; }
+.tb-expand-sidebar:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tb-expand-sidebar svg { transition: transform 0.18s; }
+.tb-expand-sidebar:hover svg { transform: translateX(1px); }
+
+/* Wrapper holds the scroll buttons + scrollable tabs area */
+.tab-bar-scroll-wrapper { position: relative; display: flex; align-items: stretch; flex: 0 1 auto; min-width: 0; }
+
+/* The scrollable tabs container: shrinks as needed, scrolls when tabs hit min-width */
+.tab-bar-tabs { display: flex; align-items: stretch; gap: 1px; padding: 0 4px; overflow-x: auto; overflow-y: hidden; min-width: 0; scrollbar-width: none; }
+.tab-bar-tabs::-webkit-scrollbar { height: 0; width: 0; display: none; }
+
+/* Scroll arrow buttons (appear only when tabs overflow) */
+.tab-scroll-btn { display: flex; align-items: center; justify-content: center; width: 22px; border: none; background: var(--bg-surface); color: var(--text-muted); cursor: pointer; flex-shrink: 0; transition: all 0.1s; z-index: 2; }
+.tab-scroll-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tab-scroll-left { border-right: 1px solid var(--border-subtle); }
+.tab-scroll-right { border-left: 1px solid var(--border-subtle); }
+
+.tab-bar-drag { flex: 1 0 0; -webkit-app-region: drag; min-width: 0; }
+
+.tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-terracotta); flex-shrink: 0; transition: background 0.15s ease; }
+.tab-dot-active { background: var(--success); }
+
+.tab-item { display: flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 11px; color: var(--text-tertiary); cursor: pointer; border-bottom: 2px solid transparent; transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease, max-width 0.18s ease, opacity 0.18s ease, padding 0.18s ease; white-space: nowrap; flex: 1 1 auto; min-width: 100px; max-width: 220px; overflow: hidden; animation: tabIn 0.18s cubic-bezier(0.2, 0, 0, 1); }
+.tab-item:hover { color: var(--text-secondary); background: var(--bg-hover); }
+.tab-item.active { color: var(--text-primary); border-bottom-color: var(--accent-terracotta); }
+.tab-closing { max-width: 0 !important; min-width: 0 !important; padding-left: 0 !important; padding-right: 0 !important; opacity: 0; pointer-events: none; flex: 0 0 0 !important; }
+
+@keyframes tabIn { from { max-width: 0; min-width: 0; opacity: 0; padding-left: 0; padding-right: 0; } to { max-width: 220px; opacity: 1; } }
+
+.tab-item-text { display: flex; flex-direction: column; min-width: 0; max-width: 180px; line-height: 1.2; }
+.tab-item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tab-item-project { font-size: 9px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.tab-item { touch-action: none; position: relative; user-select: none; -webkit-user-select: none; }
+.tab-dragging { opacity: 0.3; }
+.tab-drop-line { position: absolute; top: 4px; bottom: 4px; width: 2px; background: var(--accent-terracotta); border-radius: 1px; pointer-events: none; box-shadow: 0 0 6px var(--accent-terracotta); }
+.tab-drop-line-before { left: -2px; }
+.tab-drop-line-after { right: -2px; }
+.tab-item.tab-dragging { opacity: 0.55; }
+
+.tab-item-close { width: 16px; height: 16px; border-radius: 3px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: all 0.1s; margin-left: 3px; }
+.tab-item:hover .tab-item-close { opacity: 0.5; }
+.tab-item-close:hover { opacity: 1 !important; background: var(--bg-active); }
+
+/* Small thin tooltip for tabs */
+.tab-tooltip { position: fixed; transform: translateX(-50%); background: var(--bg-deep); color: var(--text-secondary); font-size: 10px; font-weight: 400; padding: 3px 7px; border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none; z-index: 2500; border: 1px solid var(--border-default); animation: fadeIn 0.12s ease; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+
+/* Tab action buttons (+ and chevron) */
+.tab-actions { display: flex; align-items: center; gap: 2px; padding: 0 4px; flex-shrink: 0; }
+
+.tab-action-btn { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer; transition: all 0.1s; }
+.tab-action-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tab-action-btn.active { background: var(--bg-active); color: var(--text-primary); }
+
+/* Recent sessions dropdown */
+.tab-dropdown { position: fixed; min-width: 280px; max-width: 360px; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 2000; animation: fadeIn 0.12s ease; }
+
+.tab-dropdown-header { padding: 8px 10px 6px; font-size: 10px; font-weight: 500; color: var(--text-muted); letter-spacing: 0.3px; text-transform: uppercase; border-bottom: 1px solid var(--border-subtle); margin-bottom: 3px; }
+
+.tab-dropdown-empty { padding: 16px 10px; text-align: center; font-size: 11px; color: var(--text-muted); }
+
+.tab-dropdown-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; transition: all 0.1s; }
+.tab-dropdown-item:hover { background: var(--bg-hover); }
+
+.tab-dropdown-icon { color: var(--text-muted); flex-shrink: 0; }
+.tab-dropdown-shell-icon { color: var(--accent-coral); flex-shrink: 0; }
+.tab-dropdown-divider { height: 1px; background: var(--border-subtle); margin: 4px 0; }
+.tab-shell-icon { flex-shrink: 0; margin-right: 2px; border-radius: 3px; }
+
+/* Collapsible dropdown group (e.g. Shells submenu) */
+.tab-dropdown-group-header { display: flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: var(--radius-sm); cursor: pointer; user-select: none; color: var(--text-secondary); font-size: 11px; transition: background 0.1s, color 0.1s; }
+.tab-dropdown-group-header:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tab-dropdown-group-header.open { color: var(--text-primary); }
+.tab-dropdown-group-chev { transition: transform 0.18s cubic-bezier(.4, 0, .2, 1); color: var(--text-muted); }
+.tab-dropdown-group-header.open .tab-dropdown-group-chev { transform: rotate(90deg); }
+.tab-dropdown-group-label { flex: 1; font-weight: 500; }
+.tab-dropdown-group-count { font-size: 9px; color: var(--text-muted); background: var(--bg-elevated); padding: 1px 6px; border-radius: 8px; }
+.tab-dropdown-group-body { padding-left: 6px; margin-top: 2px; }
+.tab-dropdown-item-nested { padding: 5px 8px; }
+.tab-dropdown-item-nested .tab-dropdown-item-title { font-size: 11px; }
+
+.tab-dropdown-prompt { color: var(--accent-terracotta); font-family: var(--font-mono); font-size: 11px; font-weight: 500; opacity: 0.7; flex-shrink: 0; width: 12px; text-align: center; }
+
+.tab-dropdown-loading { display: flex; justify-content: center; padding: 16px; }
+
+.tab-dropdown-item-content { min-width: 0; flex: 1; }
+.tab-dropdown-item-title { font-size: 11px; font-family: var(--font-mono); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tab-dropdown-item-time { font-size: 9px; color: var(--text-muted); margin-top: 1px; }
+
+.window-controls { display: flex; align-items: stretch; flex-shrink: 0; }
+
+.wc-btn { display: flex; align-items: center; justify-content: center; width: 42px; border: none; background: transparent; color: var(--text-tertiary); cursor: pointer; transition: all 0.1s; }
+.wc-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.wc-close:hover { background: #c42b1c; color: white; }
+
+/* ── Home View ────────────────────────────────────────────────────── */
+
+.home-view { flex: 1; overflow-y: auto; padding: 32px 40px; }
+
+.home-header { display: flex; align-items: center; gap: 16px; margin-bottom: 32px; }
+
+.home-logo { width: 44px; height: 44px; border-radius: 50%; overflow: hidden; flex-shrink: 0; }
+.home-logo img { width: 100%; height: 100%; object-fit: cover; display: block; -webkit-user-drag: none; user-select: none; pointer-events: none; }
+
+.home-title { font-family: var(--font-serif); font-size: 24px; font-weight: 500; line-height: 1.2; color: var(--text-primary); }
+.home-subtitle { font-size: 12px; color: var(--text-tertiary); margin-top: 2px; }
+
+.home-section { margin-bottom: 28px; }
+
+.home-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle); }
+
+.home-section-title { font-size: 10px; font-weight: 500; color: var(--text-muted); letter-spacing: 0.5px; text-transform: uppercase; }
+
+.home-section-actions { display: flex; gap: 6px; }
+
+.btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: var(--radius-md); border: 1px solid var(--border-default); background: var(--bg-elevated); color: var(--text-secondary); font-size: 11px; font-family: var(--font-sans); cursor: pointer; transition: all 0.15s ease; white-space: nowrap; }
+.btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-strong); }
+.btn-primary { background: var(--accent-terracotta); border-color: var(--accent-terracotta); color: var(--text-primary); }
+.btn-primary:hover { background: var(--accent-coral); border-color: var(--accent-coral); }
+
+/* Project Cards */
+.project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+
+.project-card { background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 12px; cursor: pointer; transition: all 0.15s ease; }
+.project-card:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+
+.project-card-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.project-card-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-terracotta); flex-shrink: 0; }
+.project-card-name { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+.project-card-tag { font-size: 9px; color: var(--text-muted); background: var(--bg-elevated); padding: 1px 5px; border-radius: 3px; margin-left: auto; }
+
+.project-card-path { font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Session List */
+.session-list { display: flex; flex-direction: column; gap: 2px; }
+
+.session-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--radius-md); border: 1px solid transparent; cursor: pointer; transition: all 0.2s ease; }
+.session-item:hover { border-color: var(--border-default); background: rgba(201, 100, 66, 0.03); }
+
+.session-item-time { font-size: 10px; color: var(--text-muted); flex-shrink: 0; white-space: nowrap; font-family: var(--font-mono); }
+
+.session-item-icon { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; transition: all 0.15s ease; display: flex; align-items: center; justify-content: center; }
+.session-item-icon.session-open { width: 8px; height: 8px; background: transparent; }
+.session-open-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); }
+
+.session-item-content { min-width: 0; flex: 1; }
+.session-item-title { font-size: 12px; font-family: var(--font-mono); color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.4; transition: color 0.15s ease; }
+.session-item:hover .session-item-title { color: var(--text-primary); }
+.session-item-meta { font-size: 10px; color: var(--text-muted); margin-top: 1px; display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.session-item-meta span { white-space: nowrap; }
+
+/* Metric line — sits below the project/branch meta and gives the row "signal density":
+   model · messages · context-bar · cost. Metrics flow naturally with a consistent gap;
+   missing ones collapse so we never show empty space. The model badge has a max-width
+   with ellipsis so a long model id can't push the rest of the line around. */
+.session-item-metrics { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); flex-wrap: wrap; }
+.session-metric { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.session-metric svg { opacity: 0.7; }
+
+/* Model badge — tier-colored so Opus/Sonnet/Haiku are distinguishable at a glance. Opus
+   gets the accent terracotta, Sonnet a muted blue, Haiku a quiet neutral. Truncates with
+   ellipsis when the model id is long so it never expands the parent slot. */
+.session-model-badge { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px 1px 4px; border-radius: 8px; font-size: 9px; font-weight: 600; letter-spacing: 0.2px; font-family: var(--font-sans); white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.session-model-badge svg { flex-shrink: 0; }
+.session-model-opus    { background: color-mix(in oklab, var(--accent-terracotta) 22%, var(--bg-elevated)); color: var(--accent-terracotta); }
+.session-model-sonnet  { background: color-mix(in oklab, #3498DB 22%, var(--bg-elevated)); color: #7CBBE6; }
+.session-model-haiku   { background: var(--bg-elevated); color: var(--text-tertiary); }
+.session-model-unknown { background: var(--bg-elevated); color: var(--text-muted); }
+
+/* Context mini-bar: fixed-width track, colored fill that grows with percentage. The color
+   switches from ok→warn→hot so a user approaching the 200k budget notices at a glance. */
+.session-metric-ctx { gap: 5px; }
+.session-ctx-bar { display: inline-block; width: 36px; height: 5px; border-radius: 3px; background: var(--bg-elevated); overflow: hidden; vertical-align: middle; position: relative; }
+.session-ctx-fill { display: block; height: 100%; border-radius: 3px; transition: width 0.18s ease; }
+.session-ctx-ok   .session-ctx-fill { background: var(--success); }
+.session-ctx-warn .session-ctx-fill { background: #E5A823; }
+.session-ctx-hot  .session-ctx-fill { background: var(--accent-terracotta); }
+
+.session-cost { color: var(--text-tertiary); font-weight: 500; }
+
+/* Sidebar account-wide rate-limit indicator (above the Settings cog). Pure visual chip —
+   no hover/active treatment, no cursor change — to make it obvious this is informational
+   only, not a button. The 5h/7d numbers are account-wide (not per-session); Claude Code
+   reports the same percentages on every session's statusline at any given moment. */
+.ds-rate-limit { display: flex; align-items: center; justify-content: center; padding: 5px 0; cursor: default; user-select: none; -webkit-user-select: none; }
+.ds-rate-icon { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; width: 36px; height: 36px; border-radius: 10px; }
+.ds-rate-icon svg { opacity: 0.85; }
+.ds-rate-pct { font-size: 9px; font-weight: 700; line-height: 1; font-family: var(--font-mono); letter-spacing: 0.2px; }
+.ds-rate-pct-sym { font-size: 7px; opacity: 0.7; margin-left: 1px; }
+.ds-rate-ok   .ds-rate-icon { background: color-mix(in oklab, var(--success) 18%, var(--bg-card));         color: var(--success); }
+.ds-rate-warn .ds-rate-icon { background: color-mix(in oklab, #E5A823 22%, var(--bg-card));                color: #E5A823; }
+.ds-rate-hot  .ds-rate-icon { background: color-mix(in oklab, var(--accent-terracotta) 25%, var(--bg-card)); color: var(--accent-terracotta); }
+
+/* Hover popover — mirrors the layout of claude.ai/settings/usage:
+   "Your usage limits" → Current session, divider, "Weekly limits" → All models. Each row
+   is a labeled progress meter with an X% used label and a "Resets in ..." subtitle. */
+.rl-panel { position: fixed; z-index: 3200; width: 320px; background: var(--bg-deep); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5); padding: 14px 16px; pointer-events: none; animation: rlPanelIn 0.12s ease; }
+@keyframes rlPanelIn { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: translateX(0); } }
+.rl-panel-section { display: flex; flex-direction: column; gap: 8px; }
+.rl-panel-title { font-size: 11px; font-weight: 700; color: var(--text-primary); }
+.rl-panel-divider { height: 1px; background: var(--border-subtle); margin: 12px 0; }
+.rl-panel-foot { font-size: 9.5px; color: var(--text-muted); margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-subtle); letter-spacing: 0.2px; }
+
+.rl-meter { display: flex; flex-direction: column; gap: 4px; }
+.rl-meter-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.rl-meter-label { font-size: 11px; color: var(--text-secondary); font-weight: 500; }
+.rl-meter-pct { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); }
+.rl-meter-bar { position: relative; height: 4px; background: var(--bg-elevated); border-radius: 2px; overflow: hidden; }
+.rl-meter-fill { display: block; height: 100%; border-radius: 2px; transition: width 0.18s ease; }
+.rl-meter-ok   .rl-meter-fill { background: var(--success); }
+.rl-meter-warn .rl-meter-fill { background: #E5A823; }
+.rl-meter-hot  .rl-meter-fill { background: var(--accent-terracotta); }
+.rl-meter-sub { font-size: 10px; color: var(--text-muted); }
+
+
+.session-item-prompt { color: var(--accent-terracotta); font-family: var(--font-mono); font-size: 12px; font-weight: 500; opacity: 0.5; flex-shrink: 0; transition: opacity 0.15s ease; }
+.session-item:hover .session-item-prompt { opacity: 0.8; }
+
+.session-count-badge { font-size: 10px; color: var(--text-muted); }
+
+.empty-state { text-align: center; padding: 36px 20px; color: var(--text-muted); }
+.empty-state-title { font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
+.empty-state-desc { font-size: 11px; }
+
+/* ── Terminal ─────────────────────────────────────────────────────── */
+
+.terminal-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+.terminal-header { padding: 6px 12px; background: var(--bg-surface); border-bottom: 1px solid var(--border-subtle); display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+.terminal-header-path { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-header-label { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: var(--accent-terracotta-dim); border: 1px solid var(--accent-terracotta); border-radius: 10px; flex-shrink: 0; }
+.terminal-header-project { font-size: 10px; font-weight: 600; color: var(--text-primary); }
+.terminal-header-title { font-size: 10px; color: var(--accent-coral); }
+.terminal-header-sep { color: var(--text-muted); font-size: 10px; }
+
+.terminal-body { flex: 1; display: flex; flex-direction: row; overflow: hidden; min-height: 0; }
+.terminal-container { flex: 1; padding: 4px; background: var(--bg-surface); overflow: hidden; min-width: 0; }
+.terminal-container .xterm { height: 100%; }
+.terminal-container .xterm-viewport { overflow-y: auto !important; }
+
+/* ── Git indicator (in terminal header) ──────────────────────────── */
+.terminal-git-indicator { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 2px 6px; background: transparent; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s; }
+.terminal-git-indicator:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-strong); }
+.terminal-git-indicator.active { background: var(--bg-active); color: var(--text-primary); border-color: var(--border-strong); }
+.terminal-git-branch { font-weight: 500; }
+.terminal-git-ab { display: inline-flex; align-items: center; gap: 1px; color: var(--text-tertiary); }
+.terminal-git-dot { color: var(--accent-terracotta); font-size: 8px; display: inline-flex; align-items: center; gap: 2px; }
+.terminal-git-chev { transition: transform 0.18s; color: var(--text-muted); }
+.terminal-git-chev.open { transform: rotate(180deg); }
+
+/* ── Splitter ─────────────────────────────────────────────────────── */
+.terminal-splitter { width: 4px; flex-shrink: 0; background: transparent; cursor: col-resize; position: relative; }
+.terminal-splitter::before { content: ""; position: absolute; inset: 0 1px; background: var(--border-default); transition: background 0.12s; }
+.terminal-splitter:hover::before { background: var(--accent-terracotta); }
+
+/* ── Git panel ────────────────────────────────────────────────────── */
+.terminal-git-panel { flex-shrink: 0; display: flex; flex-direction: column; background: var(--bg-surface); overflow: hidden; min-width: 0; }
+.git-panel-header { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); flex-shrink: 0; }
+.git-panel-branch { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-panel-ab { display: inline-flex; align-items: center; gap: 1px; font-size: 10px; color: var(--text-tertiary); }
+.git-panel-refresh { background: transparent; border: none; padding: 2px; color: var(--text-muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); transition: background 0.12s, color 0.12s; }
+.git-panel-refresh:hover { background: var(--bg-hover); color: var(--text-primary); }
+.git-panel-refresh.spinning svg { animation: spin 0.8s linear infinite; }
+.git-panel-scroll { flex: 1; overflow-y: auto; padding: 4px 0; }
+.git-panel-empty { padding: 12px; font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); text-align: center; }
+.git-section { margin-bottom: 6px; }
+.git-section-header { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; color: var(--text-tertiary); text-transform: uppercase; }
+.git-section-count { background: var(--bg-elevated); color: var(--text-secondary); padding: 1px 6px; border-radius: 8px; font-size: 9px; letter-spacing: 0; }
+.git-file { display: flex; align-items: center; gap: 8px; padding: 3px 10px; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); cursor: default; transition: background 0.08s; position: relative; }
+.git-file:hover { background: var(--bg-hover); color: var(--text-primary); }
+.git-file-status { flex-shrink: 0; width: 14px; text-align: center; font-weight: 600; font-size: 10px; }
+.git-file-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.git-file-action { flex-shrink: 0; background: transparent; border: none; padding: 2px; color: var(--text-muted); cursor: pointer; display: none; align-items: center; justify-content: center; border-radius: var(--radius-sm); transition: background 0.12s, color 0.12s; }
+.git-file:hover .git-file-action { display: inline-flex; }
+.git-file-action:hover { background: var(--bg-elevated); color: var(--text-primary); }
+.gs-M { color: #c9a042; }         /* modified — yellow */
+.gs-A { color: #4a9968; }         /* added — green */
+.gs-D { color: #b53333; }         /* deleted — red */
+.gs-R { color: #9a6dd7; }         /* renamed — purple */
+.gs-C { color: #42a4c9; }         /* copied — cyan */
+.gs-U { color: var(--text-muted); } /* untracked — muted */
+
+/* Change-blink: fires when a file first appears in status or its state changes.
+   The keyframes reach peak tint quickly, then fade out so later rows settle calmly. */
+@keyframes gitFileBlink {
+  0%   { background: rgba(201, 100, 66, 0.32); }
+  30%  { background: rgba(201, 100, 66, 0.22); }
+  100% { background: transparent; }
+}
+.git-file-blink { animation: gitFileBlink 1.6s ease-out; }
+
+/* Minimalist commit history */
+.git-history-section { margin-top: 8px; border-top: 1px solid var(--border-subtle); padding-top: 4px; }
+.git-history-header { cursor: pointer; user-select: none; }
+.git-history-header:hover { color: var(--text-secondary); }
+.git-history-chev { transition: transform 0.18s cubic-bezier(.4, 0, .2, 1); }
+.git-history-chev.open { transform: rotate(90deg); }
+.git-history-list { display: flex; flex-direction: column; }
+.git-history-empty { padding: 8px 10px; font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); text-align: center; }
+.git-commit { display: flex; align-items: center; gap: 8px; padding: 3px 10px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-secondary); cursor: default; transition: background 0.08s; }
+.git-commit:hover { background: var(--bg-hover); color: var(--text-primary); }
+.git-commit-hash { flex-shrink: 0; color: var(--accent-terracotta); font-size: 10px; letter-spacing: 0.3px; min-width: 50px; }
+.git-commit-subject { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.git-commit-time { flex-shrink: 0; font-size: 9.5px; color: var(--text-muted); }
+
+/* Branch detection banner — appears above the terminal body when claude /branch is detected */
+.branch-banner { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: linear-gradient(to right, rgba(201, 100, 66, 0.18), rgba(201, 100, 66, 0.08)); border-bottom: 1px solid rgba(201, 100, 66, 0.3); font-size: 11.5px; color: var(--text-primary); animation: branchBannerIn 0.22s cubic-bezier(.4, 0, .2, 1); }
+.branch-banner-icon { color: var(--accent-terracotta); flex-shrink: 0; }
+.branch-banner-text { flex: 1; display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.branch-banner-lead { color: var(--text-secondary); }
+.branch-banner-title { font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.branch-banner-btn { background: transparent; border: 1px solid var(--border-default); color: var(--text-secondary); padding: 4px 10px; border-radius: var(--radius-sm); font-size: 10.5px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: background 0.12s, color 0.12s, border-color 0.12s; }
+.branch-banner-btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-strong); }
+.branch-banner-btn-primary { background: var(--accent-terracotta); border-color: var(--accent-terracotta); color: var(--text-primary); font-weight: 500; }
+.branch-banner-btn-primary:hover { background: var(--accent-terracotta); border-color: var(--accent-terracotta); filter: brightness(1.1); }
+@keyframes branchBannerIn { from { transform: translateY(-6px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+/* ── Settings modal ───────────────────────────────────────────────── */
+.settings-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 3000; display: flex; align-items: center; justify-content: center; animation: fadeIn 0.14s ease; }
+.settings-panel { width: 480px; max-width: 92vw; max-height: 82vh; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: 0 20px 48px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; overflow: hidden; animation: scaleIn 0.16s cubic-bezier(.4, 0, .2, 1); }
+.settings-panel-wide { width: 720px; }
+
+/* ── Detailed-session-info wizard ─────────────────────────────────────
+   Same modal chrome as the rest of settings, just wider for code blocks. */
+.dsi-panel { width: 640px; }
+.dsi-body { padding: 14px 18px 16px; display: flex; flex-direction: column; gap: 14px; }
+.dsi-loading { text-align: center; color: var(--text-muted); font-size: 11px; padding: 24px 0; }
+.dsi-status { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); }
+.dsi-status-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; font-size: 11px; color: var(--text-secondary); line-height: 1.5; }
+.dsi-status-text strong { color: var(--text-primary); font-weight: 600; font-size: 12px; }
+.dsi-status-ok   { background: color-mix(in oklab, var(--success) 12%, var(--bg-elevated)); border-color: color-mix(in oklab, var(--success) 35%, transparent); color: var(--success); }
+.dsi-status-warn { background: color-mix(in oklab, var(--accent-terracotta) 10%, var(--bg-elevated)); border-color: color-mix(in oklab, var(--accent-terracotta) 30%, transparent); color: var(--accent-terracotta); }
+.dsi-mono-tiny { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.dsi-step { display: flex; flex-direction: column; gap: 6px; }
+.dsi-step-label { font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; }
+.dsi-step-label code { font-family: var(--font-mono); font-size: 10px; color: var(--accent-terracotta); background: var(--bg-elevated); padding: 1px 6px; border-radius: 3px; }
+.dsi-step-num { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent-terracotta); color: #fff; font-size: 10px; font-weight: 700; flex-shrink: 0; }
+
+.dsi-codeblock { display: flex; flex-direction: column; background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; }
+.dsi-codeblock-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 4px 10px; background: var(--bg-elevated); border-bottom: 1px solid var(--border-subtle); }
+.dsi-codeblock-label { font-size: 10px; font-family: var(--font-mono); color: var(--text-muted); letter-spacing: 0.3px; }
+.dsi-codeblock-copy { display: inline-flex; align-items: center; gap: 4px; background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 10px; padding: 3px 7px; border-radius: var(--radius-sm); transition: background 0.12s, color 0.12s; }
+.dsi-codeblock-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
+.dsi-codeblock-body { font-family: var(--font-mono); font-size: 10.5px; line-height: 1.5; color: var(--text-secondary); padding: 10px 12px; margin: 0; max-height: 220px; overflow: auto; white-space: pre; user-select: text; -webkit-user-select: text; cursor: text; }
+
+.dsi-help { font-size: 10px; color: var(--text-muted); line-height: 1.5; margin: 0; padding: 0 2px; }
+
+/* Always-visible primer at the top of the wizard — explains what this configures and why
+   it lives in the statusline hook (the only Claude Code surface that exposes cost/context). */
+.dsi-primer { background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px 12px; }
+.dsi-primer-title { display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.4px; text-transform: uppercase; margin-bottom: 4px; }
+.dsi-primer-body { font-size: 11px; color: var(--text-secondary); line-height: 1.55; }
+.dsi-primer-body code { font-family: var(--font-mono); font-size: 10px; color: var(--accent-terracotta); background: var(--bg-elevated); padding: 0 4px; border-radius: 3px; }
+.dsi-primer-body strong { color: var(--text-primary); font-weight: 600; }
+
+/* Action slot inside the status banner (reveal-script / reveal-folder buttons). */
+.dsi-status-actions { display: flex; gap: 4px; align-items: center; }
+.dsi-icon-btn { padding: 5px 7px; min-width: 0; }
+
+/* "Show latest snippet" toggle for users with a working setup — see DetailedSessionInfoWizard
+   for why this exists (probe can't verify content, only presence). */
+.dsi-update-toggle { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: transparent; border: 1px dashed var(--border-default); border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 11px; font-family: inherit; cursor: pointer; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.dsi-update-toggle:hover { background: var(--bg-hover); border-color: var(--border-strong); color: var(--text-primary); }
+.dsi-update-hint { color: var(--text-muted); font-size: 10px; line-height: 1.4; }
+
+/* "or let Claude do it" divider — separates the manual snippet from the Claude prompt. */
+.dsi-or-row { display: flex; align-items: center; gap: 10px; margin: 4px 0; }
+
+/* Standalone button replacing the never-rendered Claude-prompt code block. The prompt is
+   too long to be useful displayed; users only ever click "Copy" anyway, so this is just
+   the click target with a one-line hint underneath. */
+.dsi-claude-row { display: flex; flex-direction: column; gap: 6px; }
+.dsi-claude-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 14px; background: var(--accent-terracotta); border: 1px solid var(--accent-terracotta); color: var(--text-primary); border-radius: var(--radius-sm); font-size: 12px; font-weight: 500; font-family: inherit; cursor: pointer; transition: filter 0.12s, background 0.12s; }
+.dsi-claude-btn:hover { filter: brightness(1.08); }
+.dsi-claude-hint { font-size: 10px; color: var(--text-muted); line-height: 1.5; }
+.dsi-or-line { flex: 1; height: 1px; background: var(--border-subtle); }
+.dsi-or-text { font-size: 10px; color: var(--text-muted); letter-spacing: 0.3px; text-transform: uppercase; }
+
+.dsi-status-text code { font-family: var(--font-mono); font-size: 10px; color: var(--accent-terracotta); background: color-mix(in oklab, var(--accent-terracotta) 14%, transparent); padding: 0 4px; border-radius: 3px; }
+.dsi-foot { display: flex; align-items: center; gap: 12px; padding-top: 8px; border-top: 1px solid var(--border-subtle); }
+.dsi-foot .btn { padding: 4px 10px; font-size: 10px; }
+.dsi-foot-hint { flex: 1; font-size: 10px; color: var(--text-muted); line-height: 1.5; }
+
+/* Inline action button used on Settings rows that open a sub-dialog (e.g. wizard). */
+.settings-action-btn { padding: 4px 10px; font-size: 11px; gap: 5px; }
+.settings-layout { display: flex; flex: 1; min-height: 0; }
+.settings-nav { width: 160px; flex-shrink: 0; background: var(--bg-deep); border-right: 1px solid var(--border-subtle); padding: 8px 6px; display: flex; flex-direction: column; gap: 2px; }
+.settings-nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius-sm); font-size: 12px; color: var(--text-tertiary); cursor: pointer; transition: background 0.12s, color 0.12s; }
+.settings-nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.settings-nav-item.active { background: var(--bg-active); color: var(--text-primary); }
+.settings-row-control { flex-shrink: 0; display: flex; align-items: center; }
+.settings-color-row { display: flex; align-items: center; gap: 10px; }
+.settings-color-input { -webkit-appearance: none; appearance: none; width: 36px; height: 24px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: transparent; cursor: pointer; padding: 0; }
+.settings-color-input::-webkit-color-swatch-wrapper { padding: 2px; }
+.settings-color-input::-webkit-color-swatch { border: none; border-radius: 2px; }
+.settings-color-hex { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.settings-reset-btn { display: inline-flex; align-items: center; gap: 4px; background: transparent; border: 1px solid var(--border-default); color: var(--text-tertiary); padding: 3px 8px; border-radius: var(--radius-sm); font-size: 10px; cursor: pointer; transition: background 0.12s, color 0.12s; }
+.settings-reset-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.settings-select { background: var(--bg-deep); border: 1px solid var(--border-default); border-radius: var(--radius-sm); color: var(--text-primary); padding: 5px 8px; font-size: 11px; outline: none; cursor: pointer; min-width: 160px; }
+.settings-select:focus { border-color: var(--accent-terracotta); }
+
+/* Settings as a full page (not modal). Flat layout — no extra bordered container. */
+.settings-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.settings-view-header { padding: 28px 32px 20px; flex-shrink: 0; border-bottom: 1px solid var(--border-subtle); }
+.settings-view-title { font-family: var(--font-serif); font-size: 26px; font-weight: 500; color: var(--text-primary); margin: 0 0 6px; }
+.settings-view-subtitle { font-size: 12px; color: var(--text-tertiary); margin: 0; }
+.settings-view-layout { flex: 1; display: flex; min-height: 0; }
+.settings-view .settings-nav { width: 200px; flex-shrink: 0; background: transparent; border-right: 1px solid var(--border-subtle); padding: 16px 10px; display: flex; flex-direction: column; gap: 2px; }
+.settings-view .settings-body { flex: 1; padding: 22px 32px; overflow-y: auto; }
+.settings-shell-row { display: flex; align-items: center; gap: 10px; }
+.settings-zoom-col { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 240px; }
+.settings-zoom-row { display: flex; align-items: center; gap: 10px; }
+/* Reset button rendered below the slider rather than inline so it doesn't squeeze the
+   range track (which used to shrink as soon as the button appeared on value change). */
+.settings-reset-btn-block { align-self: flex-end; }
+.settings-range { flex: 1; appearance: none; -webkit-appearance: none; height: 4px; background: var(--border-default); border-radius: 2px; outline: none; cursor: pointer; }
+.settings-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent-terracotta); cursor: grab; border: none; }
+.settings-range::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent-terracotta); cursor: grab; border: none; }
+.settings-zoom-value { font-family: var(--font-mono, Consolas, monospace); font-size: 11px; color: var(--text-secondary); min-width: 40px; text-align: right; }
+@keyframes scaleIn { from { transform: scale(0.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.settings-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border-subtle); font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.settings-close { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; justify-content: center; transition: background 0.12s, color 0.12s; }
+.settings-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+.settings-body { padding: 14px 18px; overflow-y: auto; }
+.settings-row { display: flex; align-items: flex-start; gap: 16px; padding: 10px 0; }
+.settings-row-text { flex: 1; min-width: 0; }
+.settings-row-title { font-size: 12px; font-weight: 500; color: var(--text-primary); margin-bottom: 4px; }
+.settings-row-desc { font-size: 11px; color: var(--text-tertiary); line-height: 1.4; }
+
+/* Section grouping inside a category page — gives related settings a shared label so the
+   list reads as semantic groups rather than a flat soup of toggles. */
+.settings-section { margin-bottom: 22px; }
+.settings-section:last-child { margin-bottom: 0; }
+.settings-section-head { padding: 0 0 8px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 4px; }
+.settings-section-title { font-size: 10px; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.6px; }
+.settings-section-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
+.settings-section-body { display: flex; flex-direction: column; }
+.settings-section-body .settings-row { border-bottom: 1px solid var(--border-subtle); }
+.settings-section-body .settings-row:last-child { border-bottom: none; }
+
+/* Toggle switch */
+.settings-toggle { position: relative; display: inline-flex; flex-shrink: 0; width: 34px; height: 20px; cursor: pointer; margin-top: 2px; }
+.settings-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.settings-toggle-slider { position: absolute; inset: 0; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 12px; transition: background 0.18s, border-color 0.18s; }
+.settings-toggle-slider::before { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; background: var(--text-tertiary); border-radius: 50%; transition: transform 0.18s cubic-bezier(.4, 0, .2, 1), background 0.18s; }
+.settings-toggle input:checked + .settings-toggle-slider { background: var(--accent-terracotta); border-color: var(--accent-terracotta); }
+.settings-toggle input:checked + .settings-toggle-slider::before { transform: translateX(14px); background: #fff; }
+/* Disabled toggle: dim the whole control so it reads as "not actionable" while keeping
+   layout identical. Used when a setting depends on data we don't yet have (e.g. statusline
+   hook not configured → rate-limit + session-row metrics toggles). */
+.settings-toggle-disabled { cursor: not-allowed; opacity: 0.4; }
+.settings-toggle-disabled .settings-toggle-slider { background: var(--bg-elevated); border-color: var(--border-default); }
+.settings-toggle-disabled .settings-toggle-slider::before { background: var(--text-muted); }
+
+.settings-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border-subtle); }
+
+/* ── Project Editor Dialog ────────────────────────────────────────── */
+.edit-project-panel { width: 520px; }
+.edit-preview-row { display: flex; align-items: center; gap: 14px; padding: 10px 0 14px; margin-bottom: 14px; border-bottom: 1px solid var(--border-subtle); }
+.edit-preview-info { min-width: 0; flex: 1; }
+.edit-preview-name { font-size: 14px; font-weight: 500; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.edit-preview-path { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+
+.edit-field { margin-bottom: 14px; }
+.edit-label { display: block; font-size: 11px; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
+.edit-input { width: 100%; background: var(--bg-deep); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 7px 10px; font-size: 12px; color: var(--text-primary); font-family: var(--font-sans); outline: none; transition: border-color 0.12s, background 0.12s; }
+.edit-input:focus { border-color: var(--accent-terracotta); background: var(--bg-surface); }
+.edit-letters-input { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 2px; text-align: center; max-width: 140px; }
+.edit-hint { font-size: 10px; color: var(--text-muted); margin-top: 6px; }
+.edit-hint code { font-family: var(--font-mono); background: var(--bg-deep); padding: 1px 5px; border-radius: 3px; color: var(--text-secondary); font-size: 10px; }
+
+.edit-tabs { display: flex; background: var(--bg-deep); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 2px; margin-bottom: 8px; gap: 2px; }
+.edit-tab { flex: 1; background: transparent; border: none; padding: 6px 10px; border-radius: var(--radius-sm); font-size: 11px; color: var(--text-tertiary); cursor: pointer; transition: background 0.12s, color 0.12s; }
+.edit-tab:hover { color: var(--text-primary); }
+.edit-tab.active { background: var(--bg-active); color: var(--text-primary); }
+
+.edit-emoji-grid { display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; margin-top: 4px; padding: 4px; background: var(--bg-deep); border-radius: var(--radius-md); border: 1px solid var(--border-default); }
+.edit-emoji-item { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: 18px; border-radius: var(--radius-sm); cursor: pointer; transition: background 0.1s; }
+.edit-emoji-item:hover { background: var(--bg-hover); }
+.edit-emoji-item.active { background: var(--accent-terracotta-dim); box-shadow: inset 0 0 0 1px var(--accent-terracotta); }
+
+.edit-image-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* ── Color picker (used in Edit Folder and Edit Project dialogs) ────────── */
+.color-picker { margin-top: 4px; }
+.color-picker-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; padding: 6px; background: var(--bg-deep); border-radius: var(--radius-md); border: 1px solid var(--border-default); }
+.color-swatch { aspect-ratio: 1; border-radius: var(--radius-sm); border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #fff; transition: transform 0.1s, box-shadow 0.12s; padding: 0; }
+.color-swatch:hover { transform: scale(1.08); }
+.color-swatch.active { box-shadow: 0 0 0 2px var(--accent-terracotta); transform: scale(1.08); }
+.color-swatch-default { background: var(--accent-terracotta); }
+.color-swatch-custom { background: var(--bg-elevated); border: 1px dashed var(--border-default); color: var(--text-secondary); }
+.color-swatch-custom:hover { border-color: var(--text-primary); color: var(--text-primary); }
+/* The native color input lives off-screen — triggered programmatically by the custom swatch. */
+.color-picker-native { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+.edit-image-path { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+
+/* ── Section headers (Continue where you left / Sessions) ─────────── */
+.section-header { display: flex; align-items: center; gap: 10px; margin: 18px 0 10px; }
+.section-header-label { font-size: 10px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--text-tertiary); flex-shrink: 0; }
+.section-header-line { flex: 1; height: 1px; background: var(--border-subtle); }
+.section-header-with-actions .section-header-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* ── Session folders ──────────────────────────────────────────────── */
+.folder-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.folder { border: 1px solid var(--border-subtle); background: transparent; border-radius: var(--radius-md); overflow: hidden; transition: background 0.16s, border-color 0.16s, box-shadow 0.16s; }
+.folder.folder-drop-hover { background: var(--accent-terracotta-dim); border-color: var(--accent-terracotta); box-shadow: 0 0 0 1px var(--accent-terracotta) inset; }
+
+.folder-header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg-elevated); cursor: pointer; user-select: none; transition: background 0.1s; }
+.folder-header:hover { background: var(--bg-hover); }
+.folder-chev { color: var(--text-muted); transition: transform 0.2s cubic-bezier(.4, 0, .2, 1); flex-shrink: 0; }
+.folder-chev.open { transform: rotate(90deg); }
+.folder-icon { color: var(--accent-terracotta); flex-shrink: 0; }
+.folder-name { flex: 1; font-size: 12px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.folder-active-badge { font-size: 10px; color: var(--bg-deep); background: var(--success); padding: 1px 7px; border-radius: 9px; flex-shrink: 0; font-weight: 600; min-width: 16px; text-align: center; }
+.folder-count { font-size: 10px; color: var(--text-secondary); background: var(--bg-surface); padding: 1px 7px; border-radius: 9px; flex-shrink: 0; font-weight: 500; }
+.folder-rename-input { flex: 1; min-width: 0; background: var(--bg-deep); border: 1px solid var(--accent-terracotta); border-radius: var(--radius-sm); padding: 3px 7px; font-size: 12px; color: var(--text-primary); outline: none; font-family: inherit; font-weight: 600; }
+.folder-action { background: transparent; border: none; padding: 3px; color: var(--text-muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); opacity: 0; transition: opacity 0.12s, background 0.12s, color 0.12s; flex-shrink: 0; }
+.folder-header:hover .folder-action { opacity: 1; }
+.folder-action:hover { background: var(--bg-active); color: var(--text-primary); }
+.folder-action-danger:hover { background: rgba(181, 51, 51, 0.2); color: var(--error); }
+
+/* Collapse/expand using CSS-grid trick — smooth animation regardless of content height */
+.folder-body-wrap { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 0.22s cubic-bezier(.4, 0, .2, 1); }
+.folder-body-wrap.collapsed { grid-template-rows: 0fr; }
+.folder-body-wrap > .folder-body { min-height: 0; overflow: hidden; padding: 4px 6px 6px 22px; }
+.folder-empty { font-size: 11px; color: var(--text-muted); font-style: italic; padding: 10px 12px; text-align: center; border: 1px dashed var(--border-default); border-radius: var(--radius-sm); margin: 2px; }
+.folder-drop-hover .folder-empty { border-color: var(--accent-terracotta); color: var(--text-secondary); }
+
+.sessions-divider { height: 1px; background: var(--border-subtle); margin: 14px 8px; }
+
+.ungrouped-zone { position: relative; min-height: 40px; border-radius: var(--radius-md); transition: background 0.14s, box-shadow 0.14s; padding: 2px 0; }
+.ungrouped-zone.ungrouped-drop-hover { background: var(--accent-terracotta-dim); box-shadow: inset 0 0 0 1px var(--accent-terracotta); }
+
+.session-dragging { opacity: 0.4; }
+.session-drag-preview { pointer-events: none; z-index: 5000; opacity: 0.95; transform: rotate(-1deg); }
+.session-drag-ghost { background: var(--bg-elevated) !important; border: 1px solid var(--accent-terracotta); box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45); min-width: 260px; max-width: 420px; }
+
+/* ── Session row hover actions ────────────────────────────────────── */
+.session-item { position: relative; }
+.session-item-actions { display: flex; align-items: center; gap: 2px; margin-left: 6px; opacity: 0; transform: translateX(-4px); transition: opacity 0.14s, transform 0.14s; flex-shrink: 0; }
+.session-item:hover .session-item-actions { opacity: 1; transform: translateX(0); }
+.session-action-btn { background: transparent; border: none; padding: 5px; color: var(--text-muted); cursor: pointer; border-radius: var(--radius-sm); display: inline-flex; align-items: center; justify-content: center; transition: background 0.12s, color 0.12s; }
+.session-action-btn:hover { background: var(--bg-active); color: var(--text-primary); }
+.session-action-btn.session-action-primary:hover { background: var(--accent-terracotta-dim); color: var(--accent-terracotta); }
+.session-action-placeholder { width: 21px; flex-shrink: 0; }
+
+/* ── Loading ──────────────────────────────────────────────────────── */
+
+.loading-wrapper { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-tertiary); flex-direction: column; gap: 10px; font-size: 11px; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner { width: 20px; height: 20px; border: 2px solid var(--border-default); border-top-color: var(--accent-terracotta); border-radius: 50%; animation: spin 0.8s linear infinite; }
+
+.sessions-loader { display: flex; align-items: center; justify-content: center; padding: 32px 0; }
+.spinner-small { width: 16px; height: 16px; border: 1.5px solid var(--border-default); border-top-color: var(--accent-terracotta); border-radius: 50%; animation: spin 0.7s linear infinite; }
+
+/* ── Search Bar ───────────────────────────────────────────────────── */
+
+.search-bar { display: flex; align-items: center; gap: 8px; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 6px 10px; flex: 1; min-width: 0; transition: border-color 0.15s ease; margin-bottom: 14px; }
+.search-bar:focus-within { border-color: var(--accent-terracotta); }
+.search-bar-icon { color: var(--text-muted); flex-shrink: 0; }
+.search-bar-input { background: none; border: none; outline: none; color: var(--text-primary); font-size: 12px; font-family: var(--font-sans); flex: 1; min-width: 0; }
+.search-bar-input::placeholder { color: var(--text-muted); }
+
+/* ── Project Stats Panel ──────────────────────────────────────────── */
+/* Slim overview that replaces the old "Continue where you left" cards: a daily-cost area
+   chart on the left, two tiles (Total, Messages) on the right. No card chrome — flat on
+   the page bg so it sits in the same visual register as the session rows below. The wrap
+   is also the scroll-collapse container (transitions max-height + opacity + translateY
+   when .collapsed). */
+.project-stats-wrap { padding: 0 32px; overflow: hidden; max-height: 600px; opacity: 1; transform: translateY(0); transition: max-height 0.35s cubic-bezier(.4,0,.2,1), opacity 0.22s linear, transform 0.3s cubic-bezier(.4,0,.2,1), padding 0.3s; }
+.project-stats-wrap.collapsed { max-height: 0; opacity: 0; transform: translateY(-8px); padding-top: 0; padding-bottom: 0; }
+.project-stats { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 8px; }
+.project-stats-section-label { font-size: 9px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+.project-stats-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 240px); gap: 24px; align-items: center; }
+.project-stats-chart { display: flex; flex-direction: column; min-width: 0; }
+
+/* Area chart. `.trend-chart` is the column wrapper holding a header row, the SVG, and a
+   tick row beneath it. The SVG paints in `currentColor` so it inherits the chart's accent
+   from the parent — set on .trend-chart below. */
+.trend-chart { display: flex; flex-direction: column; gap: 4px; color: var(--accent-coral); }
+.trend-chart-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.trend-chart-svg { width: 100%; height: 96px; display: block; cursor: crosshair; }
+.trend-line { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.trend-baseline { stroke: var(--border-subtle); stroke-width: 1; }
+.trend-today-dot { fill: var(--accent-terracotta); stroke: var(--bg-deep); stroke-width: 1.5; }
+.trend-hover line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 2; opacity: 0.5; }
+.trend-hover circle { fill: var(--accent-terracotta); stroke: var(--bg-deep); stroke-width: 1.5; }
+.trend-chart-ticks { position: relative; height: 14px; font-size: 9px; color: var(--text-muted); }
+.trend-chart-ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.trend-chart-ticks span:first-child { transform: translateX(0); }
+.trend-chart-ticks span:last-child { transform: translateX(-100%); }
+
+.project-stats-tiles { display: flex; flex-direction: column; gap: 10px; align-self: stretch; justify-content: center; }
+.project-stats-tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.project-stats-tile-label { font-size: 9px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-muted); }
+.project-stats-tile-value { font-size: 22px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1.1; }
+.project-stats-tile-sub { font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.project-stats-tile-success .project-stats-tile-value { color: var(--success); }
+.project-stats-tile-success .project-stats-tile-label { color: var(--success); opacity: 0.85; }
+
+/* Chip shown in the fixed header when the stats panel is collapsed (after the user scrolls
+   down). Restored from the old "Continue where you left" UX — same anchor, same animation. */
+.continue-chip { position: absolute; left: 50%; bottom: -14px; display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; font-family: inherit; font-size: 11px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 12px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.25); opacity: 0; transform: translate(-50%, -6px); pointer-events: none; transition: opacity 0.22s, transform 0.22s, background 0.12s, color 0.12s; z-index: 4; }
+.continue-chip.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.continue-chip:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-default); }
+.continue-chip svg { color: var(--accent-terracotta); }
+
+/* ── Fixed Header + Scroll Layout ─────────────────────────────────── */
+
+.view-fixed { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.view-fixed-header { padding: 24px 32px 0; flex-shrink: 0; }
+.view-fixed-scroll { flex: 1; overflow-y: auto; padding: 0 32px 24px; }
+
+/* Project detail — fixed header on top (title never moves), scroll area below.
+   Only "Continue where you left" collapses; Sessions header is sticky inside the scroll. */
+.project-detail-fixed-head { padding: 24px 32px 0; flex-shrink: 0; position: relative; }
+.project-detail-scroll { flex: 1; overflow-y: auto; padding: 0; }
+.project-detail-sticky { position: sticky; top: 0; z-index: 3; background: var(--bg-deep); padding: 6px 32px 6px; border-bottom: 1px solid var(--border-subtle); }
+.project-detail-sessions { padding: 10px 32px 24px; }
+
+/* Entrance stagger for folders + session rows when landing on a project.
+   The container remounts on project change (keyed by path), so the animation replays. */
+@keyframes sessionEnter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.project-detail-sessions .folder,
+.project-detail-sessions .session-item { animation: sessionEnter 0.28s cubic-bezier(.22,.61,.36,1) backwards; }
+.project-detail-sessions .folder:nth-child(1),
+.project-detail-sessions .session-list > .session-item:nth-child(1) { animation-delay: 0ms; }
+.project-detail-sessions .folder:nth-child(2),
+.project-detail-sessions .session-list > .session-item:nth-child(2) { animation-delay: 25ms; }
+.project-detail-sessions .folder:nth-child(3),
+.project-detail-sessions .session-list > .session-item:nth-child(3) { animation-delay: 50ms; }
+.project-detail-sessions .folder:nth-child(4),
+.project-detail-sessions .session-list > .session-item:nth-child(4) { animation-delay: 75ms; }
+.project-detail-sessions .folder:nth-child(5),
+.project-detail-sessions .session-list > .session-item:nth-child(5) { animation-delay: 100ms; }
+.project-detail-sessions .folder:nth-child(6),
+.project-detail-sessions .session-list > .session-item:nth-child(6) { animation-delay: 125ms; }
+.project-detail-sessions .folder:nth-child(n+7),
+.project-detail-sessions .session-list > .session-item:nth-child(n+7) { animation-delay: 150ms; }
+
+/* Home screen — same stagger for the session list + project cards. */
+.home-scroll-enter .session-list > .session-item { animation: sessionEnter 0.28s cubic-bezier(.22,.61,.36,1) backwards; }
+.home-scroll-enter .session-list > .session-item:nth-child(1) { animation-delay: 0ms; }
+.home-scroll-enter .session-list > .session-item:nth-child(2) { animation-delay: 25ms; }
+.home-scroll-enter .session-list > .session-item:nth-child(3) { animation-delay: 50ms; }
+.home-scroll-enter .session-list > .session-item:nth-child(4) { animation-delay: 75ms; }
+.home-scroll-enter .session-list > .session-item:nth-child(5) { animation-delay: 100ms; }
+.home-scroll-enter .session-list > .session-item:nth-child(6) { animation-delay: 125ms; }
+.home-scroll-enter .session-list > .session-item:nth-child(n+7) { animation-delay: 150ms; }
+
+.project-cards .project-card { animation: sessionEnter 0.28s cubic-bezier(.22,.61,.36,1) backwards; }
+.project-cards .project-card:nth-child(1) { animation-delay: 0ms; }
+.project-cards .project-card:nth-child(2) { animation-delay: 30ms; }
+.project-cards .project-card:nth-child(3) { animation-delay: 60ms; }
+.project-cards .project-card:nth-child(4) { animation-delay: 90ms; }
+.project-cards .project-card:nth-child(5) { animation-delay: 120ms; }
+.project-cards .project-card:nth-child(n+6) { animation-delay: 140ms; }
+
+/* Preview collapses via pure CSS — no per-frame React updates → no lag.
+   max-height is large enough to cover any natural content height. */
+
+/* Project detail = main column + Skills aside on the right */
+.project-detail-split { flex-direction: row !important; }
+.project-detail-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; position: relative; }
+
+/* ── Skills & Plugins panel ─────────────────────────────────────── */
+.skills-panel { width: 320px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--bg-surface); border-left: 1px solid var(--border-subtle); overflow: hidden; }
+.skills-panel-head { display: flex; align-items: center; gap: 8px; padding: 16px 16px 12px; border-bottom: 1px solid var(--border-subtle); flex-shrink: 0; }
+.skills-panel-head-icon { color: var(--accent-terracotta); }
+.skills-panel-title { flex: 1; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.skills-panel-total { font-size: 10px; font-weight: 600; color: var(--text-secondary); background: var(--bg-elevated); padding: 2px 8px; border-radius: 9px; }
+.skills-panel-refresh { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); transition: background 0.12s, color 0.12s; }
+.skills-panel-refresh:hover { background: var(--bg-hover); color: var(--text-primary); }
+.skills-panel-refresh.spinning svg { animation: spin 0.8s linear infinite; }
+.skills-panel-scroll { flex: 1; overflow-y: auto; padding: 10px 10px 16px; }
+
+.skills-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 16px; text-align: center; gap: 8px; }
+.skills-empty-icon { color: var(--text-muted); opacity: 0.6; margin-bottom: 4px; }
+.skills-empty-title { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.skills-empty-desc { font-size: 10px; color: var(--text-muted); line-height: 1.5; max-width: 240px; }
+.skills-empty-desc code { font-family: var(--font-mono); background: var(--bg-deep); padding: 1px 5px; border-radius: 3px; font-size: 10px; }
+
+.skills-panel-stats { display: flex; gap: 6px; }
+.skills-stat { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; color: var(--text-secondary); background: var(--bg-elevated); padding: 2px 7px; border-radius: 9px; font-weight: 500; }
+.skills-stat svg { color: var(--text-tertiary); }
+
+/* Unified color for skill icon — skill is a skill regardless of scope. */
+.skill-icon-unified { color: var(--accent-coral); flex-shrink: 0; }
+.plugin-icon { color: #9a6dd7; flex-shrink: 0; }
+.mcp-kind-icon { color: #4fb3a8; flex-shrink: 0; }
+.memory-icon { color: #e0a84a; flex-shrink: 0; }
+
+/* Clickable inline label inside a tree node (e.g. memory name → opens viewer). */
+.tn-clickable { cursor: pointer; }
+.tn-clickable:hover { color: var(--accent-terracotta); }
+
+/* ─── Markdown dialog ──────────────────────────────────────────── */
+.md-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(2px); animation: fadeIn 0.15s ease; }
+.md-dialog { width: min(780px, 88vw); max-height: 82vh; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 16px 40px rgba(0,0,0,0.5); animation: mdIn 0.18s cubic-bezier(.4,0,.2,1); }
+@keyframes mdIn { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
+.md-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-elevated); }
+.md-title { flex: 1; font-size: 12px; font-weight: 600; color: var(--text-primary); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md-head-btn { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 5px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; justify-content: center; transition: background 0.12s, color 0.12s; }
+.md-head-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.md-body { flex: 1; overflow-y: auto; padding: 18px 22px 22px; }
+.md-status { padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px; }
+.md-status-error { color: var(--error); }
+.md-content { color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+.md-content h1 { font-size: 18px; font-weight: 600; margin: 0 0 10px; color: var(--text-primary); }
+.md-content h2 { font-size: 15px; font-weight: 600; margin: 16px 0 8px; color: var(--text-primary); }
+.md-content h3 { font-size: 13px; font-weight: 600; margin: 14px 0 6px; color: var(--text-primary); letter-spacing: 0.2px; }
+.md-content h4, .md-content h5, .md-content h6 { font-size: 12px; font-weight: 600; margin: 12px 0 6px; color: var(--text-primary); }
+.md-content p { margin: 8px 0; }
+.md-content ul, .md-content ol { margin: 8px 0; padding-left: 20px; }
+.md-content li { margin: 3px 0; }
+.md-content strong { color: var(--text-primary); font-weight: 600; }
+.md-content em { color: var(--text-primary); font-style: italic; }
+.md-content code { font-family: var(--font-mono); font-size: 11px; background: var(--bg-deep); padding: 1px 5px; border-radius: 3px; color: var(--accent-coral); }
+.md-content pre { background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px 12px; margin: 10px 0; overflow-x: auto; }
+.md-content pre code { background: transparent; padding: 0; color: var(--text-secondary); font-size: 11px; }
+.md-content a { color: var(--accent-coral); text-decoration: none; }
+.md-content a:hover { text-decoration: underline; }
+.md-content hr { border: none; border-top: 1px solid var(--border-subtle); margin: 14px 0; }
+
+/* ─── Work area & group split view ────────────────────────────── */
+.work-area { flex-direction: column; }
+.work-pane { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; overflow: hidden; display: flex; }
+
+/* Terminal slot — an empty container into which the corresponding stable terminal host
+   (created imperatively in App.tsx) is physically reparented. Lets us change layouts
+   without re-mounting the terminal. */
+.terminal-slot { flex: 1 1 auto; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
+
+/* A leaf pane inside a group (or a standalone tab). The data-group-leaf attr is what
+   the drop-zone detector uses to find targets. */
+.group-pane { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; display: flex; overflow: hidden; border: 1px solid transparent; transition: border-color 0.12s; }
+.group-pane-active { border-color: var(--accent-terracotta); }
+.group-pane-close { position: absolute; top: 5px; right: 5px; width: 20px; height: 20px; background: rgba(0,0,0,0.55); color: #fff; border: 1px solid var(--border-default); border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; z-index: 10; opacity: 0; transition: opacity 0.12s, background 0.12s, border-color 0.12s; }
+.group-pane:hover .group-pane-close { opacity: 0.85; }
+.group-pane-close:hover { opacity: 1 !important; background: var(--error); border-color: var(--error); }
+
+/* Nested split container. Flex row for col-direction (side-by-side), flex col for row (stacked). */
+.group-split { flex: 1 1 auto; display: flex; min-width: 0; min-height: 0; }
+.group-split-col { flex-direction: row; }
+.group-split-row { flex-direction: column; }
+.group-split-child { flex: 0 0 auto; min-width: 0; min-height: 0; display: flex; }
+
+.group-splitter { flex: 0 0 6px; background: transparent; position: relative; z-index: 5; }
+.group-splitter::after { content: ""; position: absolute; background: var(--border-subtle); transition: background 0.15s; }
+.group-splitter:hover::after, .group-splitter:active::after { background: var(--accent-terracotta); }
+.group-splitter-col { cursor: col-resize; }
+.group-splitter-col::after { top: 0; bottom: 0; left: 2px; width: 2px; }
+.group-splitter-row { cursor: row-resize; }
+.group-splitter-row::after { left: 0; right: 0; top: 2px; height: 2px; }
+
+/* Drop-zone preview — a single translucent rectangle painted exactly where the tab
+   will land. Much clearer than 4 persistent edge bands. */
+.drop-zone-preview { position: absolute; pointer-events: none; z-index: 200; background: rgba(201, 100, 66, 0.22); border: 2px dashed var(--accent-terracotta); border-radius: 6px; box-shadow: 0 0 40px rgba(201, 100, 66, 0.3) inset; transition: all 0.1s ease-out; }
+
+/* Tab bar: group entry style — distinct from a single-tab entry. */
+.tab-group-item { background: rgba(154, 109, 215, 0.08); }
+.tab-group-item.active { background: rgba(154, 109, 215, 0.18); }
+.tab-group-icon { color: #9a6dd7; flex-shrink: 0; }
+.tab-group-rename-input { background: var(--bg-deep); border: 1px solid #9a6dd7; border-radius: 3px; padding: 2px 6px; font-size: 12px; font-weight: 600; color: var(--text-primary); font-family: inherit; outline: none; width: 100%; min-width: 0; }
+
+/* Badge shown on a session row when its terminal is currently inside a group. */
+.session-group-badge { font-size: 9px; font-weight: 600; color: #d4b3ff; background: rgba(154, 109, 215, 0.15); border: 1px solid rgba(154, 109, 215, 0.4); padding: 2px 8px; border-radius: 8px; flex-shrink: 0; letter-spacing: 0.2px; }
+
+/* Floating pill rendered at the cursor while a tab is being dragged out of the tab bar. */
+.tab-drag-ghost { position: fixed; z-index: 3000; display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; background: var(--bg-elevated); border: 1px solid var(--accent-terracotta); border-radius: 20px; box-shadow: 0 6px 18px rgba(0,0,0,0.4); pointer-events: none; font-size: 11px; color: var(--text-primary); backdrop-filter: blur(4px); animation: ghostIn 0.12s ease-out; }
+@keyframes ghostIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: none; } }
+.tab-drag-ghost-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-terracotta); flex-shrink: 0; }
+.tab-drag-ghost-label { font-weight: 600; }
+.tab-drag-ghost-sub { font-size: 9px; color: var(--text-muted); padding-left: 6px; border-left: 1px solid var(--border-subtle); margin-left: 2px; }
+
+/* ─── Context Tree ──────────────────────────────────────────────── */
+.tn-root-list { display: flex; flex-direction: column; gap: 4px; }
+
+.tn { position: relative; }
+.tn-row { display: flex; align-items: center; gap: 6px; padding-right: 8px; min-height: 26px; cursor: pointer; user-select: none; border-radius: var(--radius-sm); transition: background 0.12s; position: relative; }
+.tn-row:hover { background: var(--bg-hover); }
+.tn-row:hover .tn-act { opacity: 1; }
+
+.tn-chev { color: var(--text-muted); transition: transform 0.18s; flex-shrink: 0; }
+.tn-chev.open { transform: rotate(90deg); }
+.tn-chev-placeholder { width: 11px; height: 11px; flex-shrink: 0; }
+
+.tn-icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 14px; }
+.tn-label-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; overflow: hidden; }
+.tn-label { font-size: 11px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tn-sublabel { font-size: 9px; font-family: var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tn-hint { font-size: 9px; color: var(--text-muted); letter-spacing: 0.3px; text-transform: uppercase; font-family: inherit; }
+
+.tn-meta { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.tn-version { font-size: 9px; font-family: var(--font-mono); color: var(--text-muted); min-width: 38px; text-align: right; }
+.tn-count { font-size: 9px; color: var(--text-muted); background: var(--bg-elevated); padding: 1px 6px; border-radius: 8px; font-weight: 500; min-width: 18px; text-align: center; }
+.tn-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.tn-dot.on  { background: var(--success); box-shadow: 0 0 0 2px rgba(35, 165, 90, 0.2); }
+.tn-dot.off { background: var(--text-muted); }
+.tn-tag { font-size: 8px; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-muted); background: var(--bg-elevated); padding: 1px 5px; border-radius: 3px; font-weight: 600; }
+.tn-mono { font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); }
+
+/* Source badges (local / project / user / wins / missing). Used by the hooks list, the
+   CLAUDE.md files list, and the Settings merged view — same visual language across the tree. */
+.tn-source-badge { font-size: 8px; letter-spacing: 0.4px; text-transform: uppercase; padding: 1px 5px; border-radius: 3px; font-weight: 600; font-family: var(--font-mono); }
+.tn-source-local   { background: color-mix(in oklab, var(--accent-terracotta) 22%, var(--bg-elevated)); color: var(--accent-terracotta); }
+.tn-source-project { background: color-mix(in oklab, #3498DB 22%, var(--bg-elevated)); color: #7CBBE6; }
+.tn-source-user    { background: var(--bg-elevated); color: var(--text-muted); }
+.tn-wins { background: var(--success); color: #fff; }
+.tn-missing { background: var(--bg-elevated); color: var(--text-muted); opacity: 0.7; }
+
+/* Hook rows: the matcher chip sits before the command, then the command preview truncates. */
+.tn-matcher { font-family: var(--font-mono); font-size: 10px; color: var(--accent-terracotta); background: color-mix(in oklab, var(--accent-terracotta) 14%, transparent); padding: 0 4px; border-radius: 3px; margin-right: 4px; }
+.tn-hook-cmd { font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Icon tints for the five new root sections — gives each tree a distinct color at a glance. */
+.hook-icon { color: var(--accent-terracotta); }
+.claudemd-icon { color: #7CBBE6; }
+.settings-icon-local   { color: var(--accent-terracotta); }
+.settings-icon-project { color: #7CBBE6; }
+.settings-icon-user    { color: var(--text-muted); }
+
+.tn-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 2px; flex-shrink: 0; min-width: 22px; }
+.tn-act { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 3px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; justify-content: center; transition: background 0.12s, color 0.12s, opacity 0.12s; opacity: 0; }
+.tn-act:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* Smooth expand via grid-template-rows trick */
+.tn-body-wrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.22s cubic-bezier(.4, 0, .2, 1); }
+.tn-body-wrap.open { grid-template-rows: 1fr; }
+.tn-body-wrap > .tn-body { min-height: 0; overflow: hidden; }
+
+.tn-desc { font-size: 10px; color: var(--text-tertiary); padding: 4px 10px 6px 28px; line-height: 1.45; font-style: italic; }
+.tn-empty { font-size: 11px; color: var(--text-muted); padding: 6px 8px; font-style: italic; }
+.tn-dim > .tn-row { opacity: 0.55; }
+
+/* Root variant — stands out as the top-level owner (user / project) */
+.tn-root > .tn-row { padding-top: 8px; padding-bottom: 8px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); margin-bottom: 2px; }
+.tn-root > .tn-row:hover { background: var(--bg-hover); border-color: var(--border-default); }
+.tn-root > .tn-row .tn-label { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+.tn-root > .tn-row > .tn-icon { color: var(--accent-terracotta); }
+.tn-root > .tn-body-wrap > .tn-body { padding: 4px 0 6px; }
+
+/* Group variant — "Plugins" / "Skills" / "MCP" buckets within a root */
+.tn-group > .tn-row .tn-label { font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-tertiary); }
+.tn-group > .tn-row > .tn-icon { color: var(--text-tertiary); }
+
+/* Item/leaf — plugins, skills, MCPs (default) */
+.tn-item > .tn-row .tn-label { font-weight: 600; }
+
+/* Guide line — thin rail on the left of each child body for tree feel */
+.tn-body > .tn { position: relative; }
+.tn-body > .tn::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-subtle);
+  pointer-events: none;
+}
+.tn-root > .tn-body-wrap > .tn-body > .tn::before { display: none; }
+
+.sessions-view-header { margin-bottom: 16px; }
+.sessions-view-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.sessions-view-title { font-family: var(--font-serif); font-size: 20px; font-weight: 500; color: var(--text-primary); margin-bottom: 2px; }
+.sessions-view-path { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); }
+/* Project header cost strip — total + 7d/today chips + 30-day sparkline. The whole row is
+   one tooltip target (hover anywhere reveals the summary), so individual bars stay click-free.
+   Sparkline inherits color via currentColor so it tracks the row's accent on theme switch. */
+.sessions-view-header-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.btn-ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+.btn-ghost:hover { background: var(--bg-hover); color: var(--error); border-color: transparent; }
+
+/* ── Context Menu ─────────────────────────────────────────────────── */
+
+.ctx-menu { position: fixed; z-index: 2000; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 4px; min-width: 160px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
+
+.ctx-item { padding: 6px 10px; border-radius: var(--radius-sm); font-size: 11px; color: var(--text-secondary); cursor: pointer; transition: all 0.1s; }
+.ctx-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.ctx-danger:hover { background: rgba(181, 51, 51, 0.15); color: var(--error); }
+
+.ctx-separator { height: 1px; background: var(--border-subtle); margin: 3px 6px; }
+
+/* ── Icon Picker ──────────────────────────────────────────────────── */
+
+.icon-picker { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-lg); width: 260px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4); padding: 12px; }
+
+.icon-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin-top: 8px; }
+
+.icon-grid-item { width: 36px; height: 36px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 18px; transition: all 0.1s; }
+.icon-grid-item:hover { background: var(--bg-hover); }
+
+.icon-picker-divider { height: 1px; background: var(--border-subtle); margin: 8px 0; }
+
+.icon-picker-image-btn { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: var(--radius-md); font-size: 12px; color: var(--text-secondary); cursor: pointer; transition: all 0.1s; }
+.icon-picker-image-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ── Project Picker Modal ─────────────────────────────────────────── */
+
+.picker-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; animation: fadeIn 0.15s ease; }
+
+.picker { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-lg); width: 420px; max-height: 480px; display: flex; flex-direction: column; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4); }
+
+.picker-header { padding: 14px 16px 2px; font-size: 14px; font-weight: 500; color: var(--text-primary); }
+.picker-desc { padding: 0 16px 10px; font-size: 10px; color: var(--text-muted); }
+
+.picker-list { flex: 1; overflow-y: auto; padding: 0 8px; min-height: 0; }
+
+.picker-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: var(--radius-md); cursor: pointer; transition: all 0.1s; }
+.picker-item:hover { background: var(--bg-hover); }
+
+.picker-check { width: 18px; height: 18px; border-radius: 4px; border: 1.5px solid var(--border-strong); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: transparent; transition: all 0.1s; }
+.picker-item.checked .picker-check { background: var(--accent-terracotta); border-color: var(--accent-terracotta); color: white; }
+
+.picker-folder-icon { color: var(--text-muted); flex-shrink: 0; }
+
+.picker-item-info { min-width: 0; flex: 1; }
+.picker-item-name { font-size: 12px; font-weight: 450; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.picker-item-path { font-size: 9px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.picker-item-count { font-size: 10px; color: var(--text-muted); flex-shrink: 0; padding: 1px 6px; background: var(--bg-elevated); border-radius: 8px; }
+
+.picker-empty { padding: 20px; text-align: center; color: var(--text-muted); font-size: 11px; }
+
+.picker-footer { padding: 10px 12px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; }
+
+/* ── Utilities ────────────────────────────────────────────────────── */
+
+.truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.fade-in { animation: fadeIn 0.15s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }

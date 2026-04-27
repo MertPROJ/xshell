@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>xshell</title>
+    <style>
+      /* Bare reset. The dark fallback on html avoids a flash of white on launch before
+         App.css loads and the theme is restored from settings.json. App.css owns the live
+         surface color via body { background: var(--bg-deep) }, which flips with the
+         [data-theme="light"] selector. Crucially, #root must stay transparent here — a
+         fixed color on it would mask body's themed background and leave panels stuck dark. */
+      html, body, #root { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+      html, body { background: #141413; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

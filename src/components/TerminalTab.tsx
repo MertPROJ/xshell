@@ -1,0 +1,684 @@
+import { useEffect, useRef, useState, useCallback, useLayoutEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { load } from "@tauri-apps/plugin-store";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { GitBranch, ArrowUp, ArrowDown, RefreshCw, ChevronRight, Plus, Minus, History, GitFork, Pencil, X as XIcon } from "lucide-react";
+import "@xterm/xterm/css/xterm.css";
+import type { Tab, GitStatus, GitFile, GitCommit, BranchInfo } from "../types";
+import { getShellById } from "../shells";
+import type { ThemeMode } from "./SettingsView";
+
+const DEFAULT_FONT_SIZE = 12;
+const MIN_FONT_SIZE = 8;
+const MAX_FONT_SIZE = 32;
+
+// Default xterm bg per app theme. Exported so SettingsView's "Reset" button can fall
+// back to the right shade per theme, and so App.tsx can detect "user is on default"
+// vs "user picked a custom color" when migrating an existing terminalBgColor across themes.
+export const DARK_TERM_BG = "#1c1c1b";
+export const LIGHT_TERM_BG = "#faf9f5";
+
+// Two complete xterm palettes that pair with the app's dark/light themes. The brand
+// (cursor, terracotta-as-yellow, selection wash) is constant across themes — it's the
+// surface and ink that flip. ANSI "white" maps to a dark gray on the light palette so
+// `echo "white text"` doesn't disappear into the parchment background.
+const DARK_PALETTE = {
+  background: DARK_TERM_BG,
+  foreground: "#faf9f5",
+  cursor: "#c96442",
+  cursorAccent: "#141413",
+  selectionBackground: "rgba(201, 100, 66, 0.3)",
+  selectionForeground: "#faf9f5",
+  black: "#30302e",
+  red: "#b53333",
+  green: "#4a9968",
+  yellow: "#c96442",
+  blue: "#3898ec",
+  magenta: "#9a6dd7",
+  cyan: "#4a9999",
+  white: "#b0aea5",
+  brightBlack: "#5e5d59",
+  brightRed: "#d97757",
+  brightGreen: "#6cc088",
+  brightYellow: "#d97757",
+  brightBlue: "#5ab0f0",
+  brightMagenta: "#b088e0",
+  brightCyan: "#6cc0c0",
+  brightWhite: "#faf9f5",
+} as const;
+
+const LIGHT_PALETTE = {
+  background: LIGHT_TERM_BG,
+  foreground: "#141413",
+  cursor: "#c96442",
+  cursorAccent: "#faf9f5",
+  selectionBackground: "rgba(201, 100, 66, 0.22)",
+  selectionForeground: "#141413",
+  black: "#141413",
+  red: "#b53333",
+  green: "#3d7a52",
+  yellow: "#c96442",
+  blue: "#2a7cc9",
+  magenta: "#7a52b5",
+  cyan: "#377a7a",
+  white: "#5e5d59",
+  brightBlack: "#87867f",
+  brightRed: "#d97757",
+  brightGreen: "#4a9968",
+  brightYellow: "#b35538",
+  brightBlue: "#3898ec",
+  brightMagenta: "#9a6dd7",
+  brightCyan: "#4a9999",
+  brightWhite: "#141413",
+} as const;
+
+function paletteFor(theme: ThemeMode, bgOverride: string) {
+  const base = theme === "light" ? LIGHT_PALETTE : DARK_PALETTE;
+  // The user's saved bg only overrides if it's a real custom pick — i.e. not one of the
+  // two known theme defaults. That way, users who never touched the picker get the right
+  // shade automatically when they flip themes; users who chose, say, solarized #002b36
+  // keep their pick on both themes.
+  const isThemeDefault = bgOverride === DARK_TERM_BG || bgOverride === LIGHT_TERM_BG;
+  return isThemeDefault ? base : { ...base, background: bgOverride };
+}
+
+async function loadZoom(tabId: string, fallback: number): Promise<number> {
+  try {
+    const store = await load("settings.json", { defaults: {}, autoSave: true });
+    const map = (await store.get<Record<string, number>>("terminal_zoom")) || {};
+    const v = map[tabId];
+    return typeof v === "number" && v >= MIN_FONT_SIZE && v <= MAX_FONT_SIZE ? v : fallback;
+  } catch { return fallback; }
+}
+async function saveZoom(tabId: string, size: number) {
+  try {
+    const store = await load("settings.json", { defaults: {}, autoSave: true });
+    const map = (await store.get<Record<string, number>>("terminal_zoom")) || {};
+    map[tabId] = size;
+    await store.set("terminal_zoom", map);
+  } catch {}
+}
+
+interface TerminalTabProps {
+  tab: Tab;
+  isActive: boolean;
+  gitPanelEnabled: boolean;
+  gitPanelFilenamesOnly: boolean;
+  terminalBgColor: string;
+  defaultFontSize: number;
+  defaultShellId: string;
+  theme: ThemeMode;
+  onBranchSwitch: (tabId: string, newSessionId: string, newTitle: string) => void;
+}
+
+function TerminalTooltip({ text, rect }: { text: string; rect: DOMRect }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [style, setStyle] = useState<React.CSSProperties>({ top: rect.bottom + 6, left: -9999 });
+  useLayoutEffect(() => {
+    if (!ref.current) return;
+    const w = ref.current.offsetWidth;
+    const half = w / 2;
+    const preferred = rect.left + rect.width / 2;
+    const left = Math.max(half + 4, Math.min(preferred, window.innerWidth - half - 4));
+    setStyle({ top: rect.bottom + 6, left });
+  }, [rect, text]);
+  return <div className="tab-tooltip" ref={ref} style={style}>{text}</div>;
+}
+
+const MIN_PANEL = 200;
+const MAX_PANEL = 600;
+const DEFAULT_PANEL = 280;
+
+export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, theme, onBranchSwitch }: TerminalTabProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const [_error, setError] = useState<string | null>(null);
+  const tabRef = useRef(tab);
+
+  const [showGitPanel, setShowGitPanel] = useState(false);
+  const [gitPanelWidth, setGitPanelWidth] = useState(DEFAULT_PANEL);
+  const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
+  const [gitCommits, setGitCommits] = useState<GitCommit[]>([]);
+  const [gitRefreshing, setGitRefreshing] = useState(false);
+  const [gitHistoryOpen, setGitHistoryOpen] = useState(false);
+  // Paths that changed in the latest status update — marked for a brief blink animation.
+  const [recentlyChangedPaths, setRecentlyChangedPaths] = useState<Set<string>>(new Set());
+  const prevFileKeysRef = useRef<Set<string>>(new Set());
+  // Guard against flagging every file on the very first poll (before we have a baseline).
+  const gitPolledOnceRef = useRef<boolean>(false);
+  const highlightTimerRef = useRef<number | null>(null);
+  // Confirmation banner shown briefly after a branch is detected and auto-applied.
+  // { oldTitle, newTitle } — auto-dismisses after ~6s, or on X click.
+  const [branchNotice, setBranchNotice] = useState<{ oldTitle: string; newTitle: string } | null>(null);
+  const branchNoticeTimerRef = useRef<number | null>(null);
+  // Same idea, but for /rename — the title-sync poll in App.tsx silently swaps tab.title
+  // when the on-disk session title changes. Surface that as a banner so the user knows.
+  const [renameNotice, setRenameNotice] = useState<{ oldTitle: string; newTitle: string } | null>(null);
+  const renameNoticeTimerRef = useRef<number | null>(null);
+  // Snapshot of session jsonls that already existed when this tab attached — plus any we've
+  // observed since. Only files OUTSIDE this set count as fresh forks. Without this, resuming
+  // an ancestor session in another tab would bump its mtime and trigger a false positive.
+  const knownSessionIdsRef = useRef<Set<string>>(new Set());
+  const knownSeededRef = useRef<boolean>(false);
+  const [tooltip, setTooltip] = useState<{ text: string; rect: DOMRect } | null>(null);
+
+  const showTt = useCallback((text: string, el: HTMLElement) => setTooltip({ text, rect: el.getBoundingClientRect() }), []);
+  const hideTt = useCallback(() => setTooltip(null), []);
+
+  // Zoom state kept in a ref so the key handler sees the latest value without re-binding.
+  const fontSizeRef = useRef<number>(defaultFontSize);
+  // Keep a live ref to the settings-level default so Ctrl+0 resets to the current preference,
+  // not whatever the prop was at mount time.
+  const defaultFontSizeRef = useRef<number>(defaultFontSize);
+  useEffect(() => { defaultFontSizeRef.current = defaultFontSize; }, [defaultFontSize]);
+  const applyFontSize = useCallback((size: number, save = true) => {
+    const clamped = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, Math.round(size)));
+    fontSizeRef.current = clamped;
+    if (terminalRef.current) {
+      terminalRef.current.options.fontSize = clamped;
+      requestAnimationFrame(() => fitAddonRef.current?.fit());
+    }
+    if (save) saveZoom(tabRef.current.id, clamped);
+  }, []);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const term = new Terminal({
+      theme: paletteFor(theme, terminalBgColor),
+      fontFamily: "Consolas, 'Courier New', monospace",
+      fontWeight: 300,
+      fontWeightBold: 500,
+      fontSize: defaultFontSizeRef.current,
+      lineHeight: 1.3,
+      cursorBlink: true,
+      cursorStyle: "bar",
+      scrollback: 10000,
+      allowProposedApi: true,
+    });
+
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.loadAddon(new WebLinksAddon());
+
+    term.open(containerRef.current);
+    terminalRef.current = term;
+    fitAddonRef.current = fitAddon;
+
+    // Intercept Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 for zoom, and Ctrl+V for paste
+    // (Windows Terminal convention — the terminal would otherwise swallow Ctrl+V as ^V).
+    term.attachCustomKeyEventHandler((ev) => {
+      if (!ev.ctrlKey || ev.type !== "keydown") return true;
+      if (ev.key === "+" || ev.key === "=") { applyFontSize(fontSizeRef.current + 1); ev.preventDefault(); return false; }
+      if (ev.key === "-" || ev.key === "_") { applyFontSize(fontSizeRef.current - 1); ev.preventDefault(); return false; }
+      if (ev.key === "0") { applyFontSize(defaultFontSizeRef.current); ev.preventDefault(); return false; }
+      // Ctrl+V (but not Ctrl+Shift+V — that stays for xterm's default / bracketed escape).
+      if (!ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === "v") {
+        ev.preventDefault();
+        navigator.clipboard.readText().then((text) => {
+          if (text) invoke("write_terminal", { id: tabRef.current.id, data: text }).catch(() => {});
+        }).catch(() => {});
+        return false;
+      }
+      return true;
+    });
+
+    // Ctrl+wheel zoom — natural in editors/terminals.
+    const onWheel = (ev: WheelEvent) => {
+      if (!ev.ctrlKey) return;
+      ev.preventDefault();
+      applyFontSize(fontSizeRef.current + (ev.deltaY < 0 ? 1 : -1));
+    };
+    containerRef.current.addEventListener("wheel", onWheel, { passive: false });
+
+    // Restore persisted zoom for this tab, then kick off fit + backend spawn.
+    loadZoom(tabRef.current.id, defaultFontSizeRef.current).then(size => {
+      fontSizeRef.current = size;
+      term.options.fontSize = size;
+      requestAnimationFrame(() => {
+        fitAddon.fit();
+        spawnBackend(term, fitAddon);
+      });
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      requestAnimationFrame(() => fitAddon.fit());
+    });
+    resizeObserver.observe(containerRef.current);
+
+    const intersectionObserver = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) requestAnimationFrame(() => { fitAddon.fit(); term.focus(); });
+    });
+    intersectionObserver.observe(containerRef.current);
+
+    // Right-click = paste clipboard into terminal (like Windows Terminal / gnome-terminal)
+    const onContextMenu = async (ev: MouseEvent) => {
+      ev.preventDefault();
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) invoke("write_terminal", { id: tabRef.current.id, data: text }).catch(() => {});
+      } catch (_) {}
+    };
+    containerRef.current.addEventListener("contextmenu", onContextMenu);
+
+    async function spawnBackend(term: Terminal, _fitAddon: FitAddon) {
+      const id = tabRef.current.id;
+
+      const unlistenOutput = await listen<string>(`terminal-output-${id}`, (event) => {
+        term.write(event.payload);
+      });
+
+      const unlistenExit = await listen(`terminal-exit-${id}`, () => {
+        term.write("\r\n\x1b[90m[Session ended]\x1b[0m\r\n");
+      });
+
+      const onDataDisposable = term.onData((data) => {
+        invoke("write_terminal", { id, data }).catch(() => {});
+      });
+
+      const onResizeDisposable = term.onResize(({ cols, rows }) => {
+        invoke("resize_terminal", { id, cols, rows }).catch(() => {});
+      });
+
+      try {
+        const shellMode = tabRef.current.shellMode || "claude";
+        // Raw shells always use the tab's explicit shellId. Claude sessions fall back to the
+        // user's default shell setting, so claude runs under the shell the user picked.
+        const effectiveShellId = tabRef.current.shellId || (shellMode === "claude" ? defaultShellId : null);
+        const shellCommand = effectiveShellId ? (getShellById(effectiveShellId)?.command || null) : null;
+        await invoke("spawn_terminal", { id, sessionId: tabRef.current.sessionId || null, customName: tabRef.current.customName || null, cwd: tabRef.current.projectPath || ".", cols: term.cols, rows: term.rows, shellMode, shellCommand, shellId: effectiveShellId });
+      } catch (err) {
+        setError(String(err));
+        term.write(`\x1b[31mFailed to start terminal: ${err}\x1b[0m\r\n`);
+        if ((tabRef.current.shellMode || "claude") === "claude") {
+          term.write(`\x1b[90mMake sure 'claude' is installed and available in your PATH.\x1b[0m\r\n`);
+        }
+      }
+
+      (term as any)._cleanup = () => {
+        unlistenOutput();
+        unlistenExit();
+        onDataDisposable.dispose();
+        onResizeDisposable.dispose();
+        invoke("close_terminal", { id }).catch(() => {});
+      };
+    }
+
+    const containerEl = containerRef.current;
+    return () => {
+      resizeObserver.disconnect();
+      intersectionObserver.disconnect();
+      containerEl?.removeEventListener("contextmenu", onContextMenu);
+      containerEl?.removeEventListener("wheel", onWheel);
+      if ((term as any)._cleanup) (term as any)._cleanup();
+      term.dispose();
+    };
+  }, []);
+
+  // Refit terminal whenever the git panel opens/closes or resizes
+  useEffect(() => {
+    if (!fitAddonRef.current) return;
+    requestAnimationFrame(() => fitAddonRef.current?.fit());
+  }, [showGitPanel, gitPanelWidth]);
+
+  // Live-update the full xterm palette whenever the app theme or the user's bg-override
+  // changes. Using `paletteFor` keeps the brand-relative colors (cursor, ANSI) consistent
+  // with whichever theme is active without firing a full terminal teardown.
+  useEffect(() => {
+    if (!terminalRef.current) return;
+    terminalRef.current.options.theme = paletteFor(theme, terminalBgColor);
+  }, [theme, terminalBgColor]);
+
+  // A stable key for a file entry: `path|staged|unstaged`. Any character change ("M"→"A",
+  // or a new file appearing) yields a new key, which is how we detect "something changed".
+  const fileKey = (f: GitFile) => `${f.path}|${f.staged}|${f.unstaged}`;
+
+  // Fetch git status (async, non-blocking). Diffs against the previous snapshot and flags
+  // newly-changed files so the UI can blink them for the user.
+  const fetchGitStatus = useCallback(async () => {
+    if (!tab.projectPath) return;
+    setGitRefreshing(true);
+    try {
+      const status = await invoke<GitStatus>("get_git_status", { cwd: tab.projectPath });
+      const currentKeys = new Set((status.files || []).map(fileKey));
+      // "Changed since last poll" = keys present now that weren't present before. This
+      // captures new files, newly-staged, newly-modified, etc. Pure removals aren't flagged
+      // (the row vanishes — no point blinking it). Skip flagging on the very first poll
+      // (otherwise every file would blink when the panel first opens).
+      const changed = new Set<string>();
+      if (gitPolledOnceRef.current) {
+        for (const f of status.files || []) {
+          if (!prevFileKeysRef.current.has(fileKey(f))) changed.add(f.path);
+        }
+      }
+      prevFileKeysRef.current = currentKeys;
+      gitPolledOnceRef.current = true;
+      setGitStatus(status);
+      if (changed.size > 0) {
+        setRecentlyChangedPaths(changed);
+        if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = window.setTimeout(() => setRecentlyChangedPaths(new Set()), 1800);
+      }
+    } catch (_) {
+      setGitStatus(null);
+    } finally {
+      setGitRefreshing(false);
+    }
+  }, [tab.projectPath]);
+
+  const fetchGitLog = useCallback(async () => {
+    if (!tab.projectPath) return;
+    try {
+      const commits = await invoke<GitCommit[]>("get_git_log", { cwd: tab.projectPath, limit: 25 });
+      setGitCommits(commits);
+    } catch (_) { setGitCommits([]); }
+  }, [tab.projectPath]);
+
+  const handleStageFile = useCallback(async (path: string) => {
+    if (!tab.projectPath) return;
+    try { await invoke("git_stage", { cwd: tab.projectPath, paths: [path] }); } catch (_) {}
+    fetchGitStatus();
+  }, [tab.projectPath, fetchGitStatus]);
+
+  const handleUnstageFile = useCallback(async (path: string) => {
+    if (!tab.projectPath) return;
+    try { await invoke("git_unstage", { cwd: tab.projectPath, paths: [path] }); } catch (_) {}
+    fetchGitStatus();
+  }, [tab.projectPath, fetchGitStatus]);
+
+  // Seed the known-ids set once per tab-session attachment. Any jsonl present now is
+  // "pre-existing" and won't be flagged as a fork of us. Runs async; checkBranch gates
+  // itself on `knownSeededRef` so we never scan with an empty set.
+  const seedKnownSessionIds = useCallback(async () => {
+    if (!tab.projectPath) return;
+    try {
+      const ids = await invoke<string[]>("list_project_session_ids", { cwd: tab.projectPath });
+      const set = new Set<string>(ids);
+      if (tab.sessionId) set.add(tab.sessionId);
+      knownSessionIdsRef.current = set;
+      knownSeededRef.current = true;
+    } catch (_) {
+      knownSessionIdsRef.current = new Set(tab.sessionId ? [tab.sessionId] : []);
+      knownSeededRef.current = true;
+    }
+  }, [tab.projectPath, tab.sessionId]);
+
+  // Detect /branch forks. Rust verifies candidacy via (a) our-session UUID overlap AND
+  // (b) tail-UUID match — so sibling forks of a shared ancestor don't trigger. The known
+  // filter also excludes any jsonl that existed when we attached (e.g. user resumed the
+  // parent in another tab; that bumps mtime but the file is pre-existing → correctly ignored).
+  const checkBranch = useCallback(async () => {
+    if (!tab.projectPath || !tab.sessionId || (tab.shellMode || "claude") !== "claude") return;
+    if (!knownSeededRef.current) return;
+    try {
+      const info = await invoke<BranchInfo | null>("detect_session_branch", {
+        cwd: tab.projectPath,
+        currentSessionId: tab.sessionId,
+        knownSessionIds: Array.from(knownSessionIdsRef.current),
+      });
+      if (!info) return;
+      // Always auto-follow. Add to known first so we don't re-detect on the next tick
+      // (the new jsonl keeps getting writes from the PTY — it's pre-existing now).
+      knownSessionIdsRef.current.add(info.new_session_id);
+      const oldTitle = tab.customName || tab.title || "previous session";
+      onBranchSwitch(tab.id, info.new_session_id, info.title);
+      // Show the confirmation banner. Auto-dismiss after ~6s so it doesn't linger.
+      if (branchNoticeTimerRef.current) window.clearTimeout(branchNoticeTimerRef.current);
+      setBranchNotice({ oldTitle, newTitle: info.title });
+      branchNoticeTimerRef.current = window.setTimeout(() => setBranchNotice(null), 6000);
+    } catch (_) {}
+  }, [tab.projectPath, tab.sessionId, tab.shellMode, tab.id, tab.title, tab.customName, onBranchSwitch]);
+
+  // Re-seed whenever the tab's sessionId changes (initial attach, or after a branch-switch).
+  useEffect(() => {
+    knownSeededRef.current = false;
+    seedKnownSessionIds();
+  }, [tab.sessionId, seedKnownSessionIds]);
+
+  // Clean up notice timers on unmount.
+  useEffect(() => () => {
+    if (branchNoticeTimerRef.current) window.clearTimeout(branchNoticeTimerRef.current);
+    if (renameNoticeTimerRef.current) window.clearTimeout(renameNoticeTimerRef.current);
+  }, []);
+
+  const dismissBranchNotice = useCallback(() => {
+    if (branchNoticeTimerRef.current) { window.clearTimeout(branchNoticeTimerRef.current); branchNoticeTimerRef.current = null; }
+    setBranchNotice(null);
+  }, []);
+
+  const dismissRenameNotice = useCallback(() => {
+    if (renameNoticeTimerRef.current) { window.clearTimeout(renameNoticeTimerRef.current); renameNoticeTimerRef.current = null; }
+    setRenameNotice(null);
+  }, []);
+
+  // /rename detection. App.tsx's title-sync poll already updates tab.title in place when
+  // the JSONL's title changes — we just need to notice the change here. A rename keeps the
+  // sessionId stable, which lets us tell it apart from a /branch (sessionId also changes).
+  // First mount: snapshot the current title without firing. Subsequent renders: fire only
+  // when title actually changes AND sessionId is unchanged.
+  const lastTitleRef = useRef<string>(tab.title);
+  const lastSessionIdRef = useRef<string | undefined>(tab.sessionId);
+  useEffect(() => {
+    const prevTitle = lastTitleRef.current;
+    const prevSessionId = lastSessionIdRef.current;
+    lastTitleRef.current = tab.title;
+    lastSessionIdRef.current = tab.sessionId;
+    if (!prevTitle || prevTitle === tab.title) return;
+    if (prevSessionId !== tab.sessionId) return; // /branch handles its own banner
+    if (!tab.sessionId) return; // pre-link customName churn isn't a rename
+    if (renameNoticeTimerRef.current) window.clearTimeout(renameNoticeTimerRef.current);
+    setRenameNotice({ oldTitle: prevTitle, newTitle: tab.title });
+    renameNoticeTimerRef.current = window.setTimeout(() => setRenameNotice(null), 6000);
+  }, [tab.title, tab.sessionId]);
+
+  // The git panel is paired with the Claude experience (matches /branch + /rename detection,
+  // commit history alongside session history, etc.). Raw shells are intentionally minimal —
+  // no git panel, no polling, no header indicator.
+  const isClaudeSession = (tab.shellMode || "claude") === "claude";
+
+  // Poll git status while tab is active (every 3s); also fetch immediately on activate.
+  // Completely off when gitPanelEnabled is false or this is a raw shell.
+  useEffect(() => {
+    if (!isActive || !tab.projectPath || !gitPanelEnabled || !isClaudeSession) return;
+    fetchGitStatus();
+    const interval = setInterval(fetchGitStatus, 3000);
+    return () => clearInterval(interval);
+  }, [isActive, tab.projectPath, gitPanelEnabled, isClaudeSession, fetchGitStatus]);
+
+  // Poll every 5s, but only while this tab is the active (focused) one. Background tabs
+  // don't scan — the user can't /branch in a tab they aren't looking at. On each tick we
+  // ask Rust whether any jsonl has appeared in the project that (a) isn't in our known
+  // set and (b) has the UUID fingerprint of a fork of our current session.
+  useEffect(() => {
+    if (!isActive) return;
+    if (!tab.projectPath || !tab.sessionId) return;
+    if ((tab.shellMode || "claude") !== "claude") return;
+    checkBranch();
+    const interval = window.setInterval(checkBranch, 5000);
+    return () => window.clearInterval(interval);
+  }, [isActive, tab.projectPath, tab.sessionId, tab.shellMode, checkBranch]);
+
+  // Refresh commit history whenever the history section is opened, and when `ahead` changes
+  // (likely a new local commit). Cheap enough to just re-fetch alongside normal polls too.
+  useEffect(() => {
+    if (!showGitPanel || !gitHistoryOpen || !gitPanelEnabled) return;
+    fetchGitLog();
+  }, [showGitPanel, gitHistoryOpen, gitPanelEnabled, gitStatus?.ahead, gitStatus?.branch, fetchGitLog]);
+
+  // If the user disables the git panel at runtime, collapse panel + drop status
+  useEffect(() => {
+    if (!gitPanelEnabled) { setShowGitPanel(false); setGitStatus(null); setGitCommits([]); }
+  }, [gitPanelEnabled]);
+
+  // Clear any pending highlight timer on unmount
+  useEffect(() => () => { if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current); }, []);
+
+  // Splitter drag — grow panel when dragging left
+  const onSplitterDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = gitPanelWidth;
+    const onMove = (ev: PointerEvent) => {
+      const delta = startX - ev.clientX;
+      setGitPanelWidth(Math.max(MIN_PANEL, Math.min(MAX_PANEL, startWidth + delta)));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, [gitPanelWidth]);
+
+  const stagedFiles = (gitStatus?.files || []).filter(f => f.staged !== " " && f.staged !== "?");
+  const unstagedFiles = (gitStatus?.files || []).filter(f => f.unstaged !== " " && f.staged !== "?");
+  const untrackedFiles = (gitStatus?.files || []).filter(f => f.staged === "?");
+  const totalChanges = (gitStatus?.files.length) || 0;
+
+  const gitCounts = [
+    gitStatus?.ahead ? `↑${gitStatus.ahead} ahead` : null,
+    gitStatus?.behind ? `↓${gitStatus.behind} behind` : null,
+    totalChanges ? `${totalChanges} changes` : null,
+  ].filter(Boolean).join(" · ");
+  const indicatorTooltip = `${showGitPanel ? "Hide" : "Show"} git panel — ${gitStatus?.branch || "detached"}${gitCounts ? ` (${gitCounts})` : ""}`;
+
+  return (
+    <div className="terminal-wrapper" onMouseLeave={hideTt}>
+      <div className="terminal-header">
+        {tab.groupId && (
+          <span className="terminal-header-label">
+            {tab.projectName && <span className="terminal-header-project">{tab.projectName}</span>}
+            {tab.projectName && tab.title && <span className="terminal-header-sep">·</span>}
+            {tab.title && <span className="terminal-header-title">{tab.title}</span>}
+          </span>
+        )}
+        {tab.projectPath && <span className="terminal-header-path">{tab.projectPath}</span>}
+        {gitPanelEnabled && isClaudeSession && gitStatus?.is_repo && (
+          <button className={`terminal-git-indicator ${showGitPanel ? "active" : ""}`} onClick={() => { setShowGitPanel(v => !v); if (!showGitPanel) fetchGitStatus(); hideTt(); }} onMouseEnter={(e) => showTt(indicatorTooltip, e.currentTarget)} onMouseLeave={hideTt}>
+            <GitBranch size={11} />
+            <span className="terminal-git-branch">{gitStatus.branch || "detached"}</span>
+            {gitStatus.ahead > 0 && <span className="terminal-git-ab"><ArrowUp size={9} />{gitStatus.ahead}</span>}
+            {gitStatus.behind > 0 && <span className="terminal-git-ab"><ArrowDown size={9} />{gitStatus.behind}</span>}
+            {totalChanges > 0 && <span className="terminal-git-dot">●{totalChanges}</span>}
+            <ChevronRight size={10} className={`terminal-git-chev ${showGitPanel ? "open" : ""}`} />
+          </button>
+        )}
+      </div>
+      {branchNotice && (
+        <div className="branch-banner">
+          <GitFork size={13} className="branch-banner-icon" />
+          <span className="branch-banner-text">
+            <span className="branch-banner-lead">Branch detected — switched from</span>
+            <span className="branch-banner-title">{branchNotice.oldTitle}</span>
+            <span className="branch-banner-lead">to</span>
+            <span className="branch-banner-title">{branchNotice.newTitle}</span>
+          </span>
+          <button className="branch-banner-btn" onClick={dismissBranchNotice} aria-label="Dismiss"><XIcon size={12} /></button>
+        </div>
+      )}
+      {renameNotice && (
+        <div className="branch-banner">
+          <Pencil size={13} className="branch-banner-icon" />
+          <span className="branch-banner-text">
+            <span className="branch-banner-lead">Rename detected — renamed from</span>
+            <span className="branch-banner-title">{renameNotice.oldTitle}</span>
+            <span className="branch-banner-lead">to</span>
+            <span className="branch-banner-title">{renameNotice.newTitle}</span>
+          </span>
+          <button className="branch-banner-btn" onClick={dismissRenameNotice} aria-label="Dismiss"><XIcon size={12} /></button>
+        </div>
+      )}
+      <div className="terminal-body">
+        <div className="terminal-container" ref={containerRef} style={{ background: paletteFor(theme, terminalBgColor).background }} />
+        {gitPanelEnabled && isClaudeSession && showGitPanel && gitStatus?.is_repo && (
+          <>
+            <div className="terminal-splitter" onPointerDown={onSplitterDown} onMouseEnter={(e) => showTt("Drag to resize", e.currentTarget)} onMouseLeave={hideTt} />
+            <div className="terminal-git-panel" style={{ width: gitPanelWidth }}>
+              <div className="git-panel-header">
+                <GitBranch size={12} />
+                <span className="git-panel-branch">{gitStatus.branch}</span>
+                {gitStatus.ahead > 0 && <span className="git-panel-ab" onMouseEnter={(e) => showTt(`${gitStatus.ahead} commit(s) ahead of remote`, e.currentTarget)} onMouseLeave={hideTt}><ArrowUp size={10} />{gitStatus.ahead}</span>}
+                {gitStatus.behind > 0 && <span className="git-panel-ab" onMouseEnter={(e) => showTt(`${gitStatus.behind} commit(s) behind remote`, e.currentTarget)} onMouseLeave={hideTt}><ArrowDown size={10} />{gitStatus.behind}</span>}
+                <button className={`git-panel-refresh ${gitRefreshing ? "spinning" : ""}`} onClick={fetchGitStatus} onMouseEnter={(e) => showTt("Refresh now", e.currentTarget)} onMouseLeave={hideTt}><RefreshCw size={11} /></button>
+              </div>
+              <div className="git-panel-scroll">
+                {totalChanges === 0 && <div className="git-panel-empty">Working tree clean</div>}
+                {stagedFiles.length > 0 && <GitSection label="Staged" files={stagedFiles} column="staged" filenamesOnly={gitPanelFilenamesOnly} highlightedPaths={recentlyChangedPaths} onStage={handleStageFile} onUnstage={handleUnstageFile} showTt={showTt} hideTt={hideTt} />}
+                {unstagedFiles.length > 0 && <GitSection label="Changes" files={unstagedFiles} column="unstaged" filenamesOnly={gitPanelFilenamesOnly} highlightedPaths={recentlyChangedPaths} onStage={handleStageFile} onUnstage={handleUnstageFile} showTt={showTt} hideTt={hideTt} />}
+                {untrackedFiles.length > 0 && <GitSection label="Untracked" files={untrackedFiles} column="untracked" filenamesOnly={gitPanelFilenamesOnly} highlightedPaths={recentlyChangedPaths} onStage={handleStageFile} onUnstage={handleUnstageFile} showTt={showTt} hideTt={hideTt} />}
+                <GitHistorySection open={gitHistoryOpen} commits={gitCommits} onToggle={() => setGitHistoryOpen(v => !v)} showTt={showTt} hideTt={hideTt} />
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+      {tooltip && <TerminalTooltip text={tooltip.text} rect={tooltip.rect} />}
+    </div>
+  );
+}
+
+function basename(p: string): string {
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return i >= 0 ? p.slice(i + 1) : p;
+}
+
+function GitSection({ label, files, column, filenamesOnly, highlightedPaths, onStage, onUnstage, showTt, hideTt }: { label: string; files: GitFile[]; column: "staged" | "unstaged" | "untracked"; filenamesOnly: boolean; highlightedPaths: Set<string>; onStage: (path: string) => void; onUnstage: (path: string) => void; showTt: (text: string, el: HTMLElement) => void; hideTt: () => void }) {
+  const isStagedCol = column === "staged";
+  return (
+    <div className="git-section">
+      <div className="git-section-header"><span>{label}</span><span className="git-section-count">{files.length}</span></div>
+      {files.map((f, i) => {
+        const ch = isStagedCol ? f.staged : column === "unstaged" ? f.unstaged : "?";
+        const postRename = f.path.includes(" -> ") ? f.path.split(" -> ").pop()! : f.path;
+        const displayName = filenamesOnly ? basename(postRename) : postRename;
+        const statusName: Record<string, string> = { M: "Modified", A: "Added", D: "Deleted", R: "Renamed", C: "Copied", U: "Untracked", "?": "Untracked" };
+        const tipText = `${statusName[ch] || "Changed"} — ${f.path}`;
+        const highlighted = highlightedPaths.has(f.path);
+        return (
+          <div key={i} className={`git-file ${highlighted ? "git-file-blink" : ""}`} onMouseEnter={(e) => showTt(tipText, e.currentTarget)} onMouseLeave={hideTt}>
+            <span className={`git-file-status gs-${ch === "?" ? "U" : ch}`}>{ch === "?" ? "U" : ch.trim() || " "}</span>
+            <span className="git-file-path" title={filenamesOnly ? f.path : undefined}>{displayName}</span>
+            {isStagedCol ? (
+              <button className="git-file-action" onClick={(e) => { e.stopPropagation(); onUnstage(postRename); }} onMouseEnter={(ev) => showTt("Unstage", ev.currentTarget)} onMouseLeave={hideTt} aria-label="Unstage"><Minus size={11} /></button>
+            ) : (
+              <button className="git-file-action" onClick={(e) => { e.stopPropagation(); onStage(postRename); }} onMouseEnter={(ev) => showTt("Stage", ev.currentTarget)} onMouseLeave={hideTt} aria-label="Stage"><Plus size={11} /></button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function GitHistorySection({ open, commits, onToggle, showTt, hideTt }: { open: boolean; commits: GitCommit[]; onToggle: () => void; showTt: (text: string, el: HTMLElement) => void; hideTt: () => void }) {
+  return (
+    <div className="git-section git-history-section">
+      <div className={`git-section-header git-history-header ${open ? "open" : ""}`} onClick={onToggle}>
+        <ChevronRight size={11} className={`git-history-chev ${open ? "open" : ""}`} />
+        <History size={11} />
+        <span>History</span>
+        {open && commits.length > 0 && <span className="git-section-count">{commits.length}</span>}
+      </div>
+      {open && (
+        <div className="git-history-list">
+          {commits.length === 0 && <div className="git-history-empty">No commits</div>}
+          {commits.map((c) => (
+            <div key={c.hash} className="git-commit" onMouseEnter={(e) => showTt(`${c.short_hash} · ${c.author} · ${c.relative_time}`, e.currentTarget)} onMouseLeave={hideTt}>
+              <span className="git-commit-hash">{c.short_hash}</span>
+              <span className="git-commit-subject">{c.subject}</span>
+              <span className="git-commit-time">{c.relative_time}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
