@@ -74,3 +74,15 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # Upload the raw xshell.exe (portable build, no installer wrapper) so the
+      # npm wrapper can fetch it directly without triggering a UAC install dialog.
+      - name: Upload portable Windows binary
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cp src-tauri/target/release/xshell.exe "xshell_${VERSION}_x64.exe"
+          gh release upload "${GITHUB_REF_NAME}" "xshell_${VERSION}_x64.exe" --clobber
