@@ -58,7 +58,16 @@ Built with Tauri 2 and Rust. Native on Windows, macOS, and Linux.
 
 ## Install
 
-> First release coming soon. Once tagged, prebuilt installers will appear on the [Releases page](https://github.com/MertPROJ/xshell/releases/latest).
+The fastest way — works on Windows, macOS, and Linux:
+
+```bash
+npm install -g xshell-app
+xshell
+```
+
+The `npm install` step downloads the right binary for your platform from the [latest GitHub release](https://github.com/MertPROJ/xshell/releases/latest) into `~/.xshell/bin/`. The `xshell` command then launches the app.
+
+### Or download an installer directly
 
 | Platform | File |
 | --- | --- |
