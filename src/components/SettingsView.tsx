@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Paintbrush, Terminal as TerminalIcon, Settings as SettingsIcon, RotateCcw, Sparkles } from "lucide-react";
+import { Paintbrush, Terminal as TerminalIcon, Settings as SettingsIcon, RotateCcw, Sparkles, Info, ExternalLink, RefreshCw, CheckCircle2 } from "lucide-react";
 import { getAvailableShells } from "../shells";
 import { ShellIcon } from "./ShellIcon";
 import { useTooltip, ttProps } from "./Tooltip";
 import { DetailedSessionInfoWizard } from "./DetailedSessionInfoWizard";
 import { DARK_TERM_BG, LIGHT_TERM_BG } from "./TerminalTab";
+import type { UpdateInfo } from "../hooks/useUpdateCheck";
 
 export type ThemeMode = "dark" | "light";
 
@@ -30,14 +31,16 @@ interface SettingsViewProps {
   onSetShowRateLimitInSidebar: (enabled: boolean) => void;
   showSessionRowMetrics: boolean;
   onSetShowSessionRowMetrics: (enabled: boolean) => void;
+  updateInfo: UpdateInfo;
 }
 
-type Category = "appearance" | "terminal" | "behavior";
+type Category = "appearance" | "terminal" | "behavior" | "about";
 
 const CATEGORIES: { id: Category; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
   { id: "appearance", label: "Appearance", icon: Paintbrush },
   { id: "terminal",   label: "Terminal",   icon: TerminalIcon },
   { id: "behavior",   label: "Behavior",   icon: SettingsIcon },
+  { id: "about",      label: "About",      icon: Info },
 ];
 
 
@@ -76,7 +79,7 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanelEnabled, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanelEnabled, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
@@ -106,6 +109,8 @@ export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanel
             <div key={id} className={`settings-nav-item ${active === id ? "active" : ""}`} onClick={() => setActive(id)}>
               <Icon size={13} />
               <span>{label}</span>
+              {/* Tells the user where the +1 on the Settings cog is coming from. */}
+              {id === "about" && updateInfo.updateAvailable && <span className="settings-nav-dot" title="Update available" />}
             </div>
           ))}
         </div>
@@ -197,6 +202,44 @@ export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanel
                 </SettingRow>
               </Section>
             </>
+          )}
+
+          {active === "about" && (
+            <Section title="Version" description="xshell ships via GitHub Releases (binary installer) and npm. The check below queries GitHub Releases for the latest tagged version.">
+              <SettingRow title="Installed version" description="The version of xshell currently running. Comes from the bundled tauri.conf.json — restart the app after updating.">
+                <span className="settings-version-current">{updateInfo.currentVersion || "—"}</span>
+              </SettingRow>
+              <SettingRow title="Latest release" description={updateInfo.error ? `Couldn't reach GitHub: ${updateInfo.error}` : updateInfo.loading ? "Checking GitHub Releases…" : updateInfo.publishedAt ? `Published ${new Date(updateInfo.publishedAt).toLocaleDateString()}` : "Latest tagged release on GitHub."}>
+                <div className="settings-version-row">
+                  {updateInfo.loading ? (
+                    <span className="settings-version-muted">Checking…</span>
+                  ) : updateInfo.latestVersion ? (
+                    <>
+                      <span className="settings-version-current">{updateInfo.latestVersion}</span>
+                      {updateInfo.updateAvailable ? (
+                        <span className="settings-version-chip settings-version-chip-new">New</span>
+                      ) : (
+                        <span className="settings-version-chip settings-version-chip-ok"><CheckCircle2 size={10} /> Up to date</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="settings-version-muted">Unavailable</span>
+                  )}
+                  <button className="btn btn-ghost settings-action-btn" onClick={updateInfo.refresh} disabled={updateInfo.loading} {...ttProps(tt, "Re-check GitHub Releases")}><RefreshCw size={11} /> Refresh</button>
+                </div>
+              </SettingRow>
+              {updateInfo.updateAvailable && updateInfo.releaseUrl && (
+                <SettingRow title="Update" description="Install via npm (npm i -g xshell-app@latest) or download the binary from the release page.">
+                  <button className="btn btn-ghost settings-action-btn" onClick={() => invoke("open_url", { url: updateInfo.releaseUrl! }).catch(() => {})}><ExternalLink size={11} /> View release</button>
+                </SettingRow>
+              )}
+              {updateInfo.updateAvailable && updateInfo.releaseNotes && (
+                <div className="settings-release-notes">
+                  <div className="settings-release-notes-head">Release notes — v{updateInfo.latestVersion}</div>
+                  <pre className="settings-release-notes-body">{updateInfo.releaseNotes}</pre>
+                </div>
+              )}
+            </Section>
           )}
         </div>
       </div>

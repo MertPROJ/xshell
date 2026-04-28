@@ -1093,6 +1093,31 @@ fn reveal_in_explorer(path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    use std::process::Command;
+    // Only http(s) — open_url is invoked from the frontend, and refusing other schemes
+    // prevents an attacker-controlled URL from launching an arbitrary local handler.
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("only http(s) urls are allowed".into());
+    }
+    let mut cmd;
+    #[cfg(target_os = "windows")]
+    {
+        cmd = Command::new("cmd");
+        // Empty "" arg is the window title slot — without it, `start` treats the URL as the title.
+        cmd.args(["/c", "start", "", &url]);
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    #[cfg(target_os = "macos")]
+    { cmd = Command::new("open"); cmd.arg(&url); }
+    #[cfg(target_os = "linux")]
+    { cmd = Command::new("xdg-open"); cmd.arg(&url); }
+    cmd.spawn().map_err(|e| format!("Failed to open url: {}", e))?;
+    Ok(())
+}
+
 // ── Git Status ────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1583,7 +1608,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(AppState { terminals: Mutex::new(HashMap::new()) })
-        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, spawn_terminal, write_terminal, resize_terminal, close_terminal])
+        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, spawn_terminal, write_terminal, resize_terminal, close_terminal])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

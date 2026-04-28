@@ -143,6 +143,9 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 /* Active-session badge (Discord-style) — anchored to the icon's right edge (not the item's),
    so it sits correctly whether the item is top-level or inside a narrower folder bubble. */
 .ds-active-badge { position: absolute; bottom: 0; right: calc(50% - 21px); min-width: 18px; height: 18px; background: var(--success); color: #fff; font-size: 10px; font-weight: 700; border-radius: 9px; display: flex; align-items: center; justify-content: center; border: 2px solid var(--bg-surface); padding: 0 5px; z-index: 2; box-shadow: 0 1px 3px rgba(0,0,0,0.3); pointer-events: none; }
+/* Settings cog "update available" pill — same shape as .ds-active-badge but red and anchored
+   to the top-right of the icon so it doesn't collide with the .ds-indicator on the left. */
+.ds-settings-update-badge { position: absolute; top: -2px; right: calc(50% - 22px); min-width: 18px; height: 16px; background: #e5484d; color: #fff; font-size: 9px; font-weight: 700; border-radius: 8px; display: flex; align-items: center; justify-content: center; border: 2px solid var(--bg-surface); padding: 0 5px; z-index: 2; box-shadow: 0 1px 3px rgba(0,0,0,0.4); pointer-events: none; letter-spacing: 0.2px; }
 .ds-dragging { opacity: 0.3; transform: scale(0.92); }
 .ds-drop-line { position: absolute; left: 12px; right: 12px; height: 2px; background: var(--accent-terracotta); border-radius: 1px; pointer-events: none; box-shadow: 0 0 6px var(--accent-terracotta); }
 .ds-drop-line-before { top: -1px; }
@@ -619,11 +622,25 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 
 /* Inline action button used on Settings rows that open a sub-dialog (e.g. wizard). */
 .settings-action-btn { padding: 4px 10px; font-size: 11px; gap: 5px; }
+/* About → Version row: monospaced version number + status chip + refresh button. */
+.settings-version-row { display: flex; align-items: center; gap: 10px; }
+.settings-version-current { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); }
+.settings-version-muted { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.settings-version-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 600; letter-spacing: 0.3px; }
+.settings-version-chip-new { background: rgba(229, 72, 77, 0.18); color: #f87277; border: 1px solid rgba(229, 72, 77, 0.4); }
+.settings-version-chip-ok { background: rgba(63, 153, 84, 0.14); color: var(--success); border: 1px solid rgba(63, 153, 84, 0.32); }
+.settings-release-notes { margin-top: 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-deep); }
+.settings-release-notes-head { font-size: 10px; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.6px; padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); }
+.settings-release-notes-body { margin: 0; padding: 10px 12px; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
 .settings-layout { display: flex; flex: 1; min-height: 0; }
 .settings-nav { width: 160px; flex-shrink: 0; background: var(--bg-deep); border-right: 1px solid var(--border-subtle); padding: 8px 6px; display: flex; flex-direction: column; gap: 2px; }
 .settings-nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius-sm); font-size: 12px; color: var(--text-tertiary); cursor: pointer; transition: background 0.12s, color 0.12s; }
 .settings-nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 .settings-nav-item.active { background: var(--bg-active); color: var(--text-primary); }
+/* Small red dot pushed to the right edge of a nav item — tells the user which page the
+   +1 on the Settings cog refers to. */
+.settings-nav-dot { margin-left: auto; width: 8px; height: 8px; background: #e5484d; border-radius: 50%; box-shadow: 0 0 0 2px var(--bg-deep); flex-shrink: 0; }
+.settings-nav-item.active .settings-nav-dot { box-shadow: 0 0 0 2px var(--bg-active); }
 .settings-row-control { flex-shrink: 0; display: flex; align-items: center; }
 .settings-color-row { display: flex; align-items: center; gap: 10px; }
 .settings-color-input { -webkit-appearance: none; appearance: none; width: 36px; height: 24px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: transparent; cursor: pointer; padding: 0; }
@@ -940,6 +957,18 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .md-head-btn { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 5px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; justify-content: center; transition: background 0.12s, color 0.12s; }
 .md-head-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .md-body { flex: 1; overflow-y: auto; padding: 18px 22px 22px; }
+/* On-start update dialog — narrower than the markdown viewer, with a footer of action buttons. */
+.upd-dialog { width: min(560px, 90vw); }
+.upd-body { display: flex; flex-direction: column; gap: 14px; padding: 18px 22px; }
+.upd-summary { font-size: 13px; color: var(--text-primary); line-height: 1.5; }
+.upd-summary strong { font-family: var(--font-mono); font-weight: 700; color: var(--accent-coral); }
+.upd-install { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.upd-install code { font-family: var(--font-mono); font-size: 11px; padding: 1px 6px; background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: 4px; color: var(--text-primary); }
+.upd-notes { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-deep); }
+.upd-notes-head { font-size: 10px; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.6px; padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); }
+.upd-notes-body { margin: 0; padding: 10px 12px; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; }
+.upd-foot { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-subtle); background: var(--bg-elevated); }
+.upd-foot-spacer { flex: 1; }
 .md-status { padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px; }
 .md-status-error { color: var(--error); }
 .md-content { color: var(--text-secondary); font-size: 13px; line-height: 1.6; }

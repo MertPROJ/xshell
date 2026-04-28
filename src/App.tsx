@@ -16,6 +16,8 @@ import { ProjectPicker } from "./components/ProjectPicker";
 import type { ProjectInfo, ProjectSettings, SessionFolder, SessionInfo, Tab, Group, LayoutNode, SidebarItem, SidebarFolder } from "./types";
 import { GroupView } from "./components/GroupView";
 import { countLeaves, collectLeafIds, insertLeaf, removeLeaf, setRatioAt, DropZone } from "./layout";
+import { useUpdateCheck } from "./hooks/useUpdateCheck";
+import { UpdateDialog } from "./components/UpdateDialog";
 
 // Flatten sidebar items to an ordered list of project paths (folders expanded in place).
 // Used to derive `savedPaths` for downstream code that doesn't care about folders.
@@ -97,6 +99,16 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [editingProjectPath, setEditingProjectPath] = useState<string | null>(null);
+  // Update check — fetches GitHub Releases on mount; the result drives the red badge on the
+  // Settings cog (Sidebar), the About page (SettingsView), and the on-start dialog.
+  const updateInfo = useUpdateCheck();
+  // One-time-per-version dialog — opens once per launch when GitHub has a newer release AND
+  // the user hasn't already skipped that specific version. `lastSeenUpdateVersion` is loaded
+  // from the store and re-written on "Skip this version".
+  const [lastSeenUpdateVersion, setLastSeenUpdateVersion] = useState<string | null>(null);
+  const [lastSeenLoaded, setLastSeenLoaded] = useState(false);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [updateDialogShown, setUpdateDialogShown] = useState(false);
   const tabsRef = useRef<Tab[]>([]);
   const activeTabIdRef = useRef<string>("home");
 
@@ -188,6 +200,44 @@ export default function App() {
       setInitialLoading(false);
     })();
   }, []);
+
+  // ── Load the last skipped-update version from the store ───────────
+  useEffect(() => {
+    (async () => {
+      try {
+        const store = await load("settings.json", { defaults: {}, autoSave: true });
+        const v = await store.get<string>("last_seen_update_version");
+        if (typeof v === "string") setLastSeenUpdateVersion(v);
+      } catch (_) {}
+      setLastSeenLoaded(true);
+    })();
+  }, []);
+
+  // Open the update dialog once per launch, only if the user hasn't already skipped this
+  // exact version. `updateDialogShown` ensures it never re-opens within the same session
+  // even if the hook re-renders.
+  useEffect(() => {
+    if (!lastSeenLoaded || updateDialogShown) return;
+    if (updateInfo.loading || updateInfo.error) return;
+    if (!updateInfo.updateAvailable || !updateInfo.latestVersion) return;
+    if (lastSeenUpdateVersion === updateInfo.latestVersion) return;
+    setUpdateDialogOpen(true);
+    setUpdateDialogShown(true);
+  }, [lastSeenLoaded, updateDialogShown, updateInfo.loading, updateInfo.error, updateInfo.updateAvailable, updateInfo.latestVersion, lastSeenUpdateVersion]);
+
+  // Any close path through the dialog runs through here. Always persists `last_seen_update_version`
+  // so the dialog won't fire again until GitHub ships a NEWER tag — the badge + About dot are
+  // unaffected and stay until the bundled version actually catches up.
+  const dismissUpdateDialog = useCallback(async () => {
+    const v = updateInfo.latestVersion;
+    setUpdateDialogOpen(false);
+    if (!v) return;
+    setLastSeenUpdateVersion(v);
+    try {
+      const store = await load("settings.json", { defaults: {}, autoSave: true });
+      await store.set("last_seen_update_version", v);
+    } catch (_) {}
+  }, [updateInfo.latestVersion]);
 
   // ── Persist tabs whenever they change (after initial restore) ─────
   useEffect(() => {
@@ -839,12 +889,12 @@ export default function App() {
 
   return (
     <div className={`app-layout ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <Sidebar projects={userProjects} projectIcons={projectIcons} selectedProject={selectedProject} activeCountByProject={activeCountByProject} sidebarLayout={sidebarLayout} onLayoutChange={persistSidebarLayout} onSelectProject={handleSelectProject} onGoHome={handleGoHome} onRemoveProject={handleRemoveProject} onEditProject={(p) => setEditingProjectPath(p)} onHoverProject={setHoveredProjectPath} onOpenSettings={() => setActiveTabId("settings")} onAddProject={() => setShowProjectPicker(true)} onCollapse={() => setSidebarCollapsed(true)} activeTabId={activeTabId} linkedProjectPath={activeTabProjectPath} showRateLimit={showRateLimitInSidebar} />
+      <Sidebar projects={userProjects} projectIcons={projectIcons} selectedProject={selectedProject} activeCountByProject={activeCountByProject} sidebarLayout={sidebarLayout} onLayoutChange={persistSidebarLayout} onSelectProject={handleSelectProject} onGoHome={handleGoHome} onRemoveProject={handleRemoveProject} onEditProject={(p) => setEditingProjectPath(p)} onHoverProject={setHoveredProjectPath} onOpenSettings={() => setActiveTabId("settings")} onAddProject={() => setShowProjectPicker(true)} onCollapse={() => setSidebarCollapsed(true)} activeTabId={activeTabId} linkedProjectPath={activeTabProjectPath} showRateLimit={showRateLimitInSidebar} updateAvailable={updateInfo.updateAvailable} />
       <div className="main-content">
         <TabBar tabs={tabs} entries={entries} onRenameGroup={(id, name) => setGroups(prev => prev.map(g => g.id === id ? { ...g, name } : g))} closingTabIds={closingTabIds} activeTabId={activeTabId} selectedProject={selectedProject} hoveredProjectPath={hoveredProjectPath} linkedProjectPath={activeTabProjectPath} activeTabProject={contextProject} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} projectIcons={projectIcons} sidebarCollapsed={sidebarCollapsed} defaultShell={defaultShell} onExpandSidebar={() => setSidebarCollapsed(false)} onSelectTab={setActiveTabId} onCloseTab={handleCloseTab} onReorderTabs={handleReorderTabs} onNewChatInActive={handleNewChatInActive} onNewShellInContext={handleNewShellInContext} onOpenSession={handleOpenSession} onNewShell={handleNewShell} />
         {/* Settings view — hidden unless activeTabId === 'settings' */}
         <div style={{ display: showSettings ? "flex" : "none", flex: 1, overflow: "hidden" }}>
-          <SettingsView theme={theme} onSetTheme={persistTheme} gitPanelEnabled={gitPanelEnabled} onSetGitPanelEnabled={persistGitPanelEnabled} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} />
+          <SettingsView theme={theme} onSetTheme={persistTheme} gitPanelEnabled={gitPanelEnabled} onSetGitPanelEnabled={persistGitPanelEnabled} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} updateInfo={updateInfo} />
         </div>
         {/* Home view — hidden when a terminal tab is active */}
         <div style={{ display: showHome ? "flex" : "none", flex: 1, overflow: "hidden" }}>
@@ -929,6 +979,7 @@ export default function App() {
         const settings = projectIcons[editingProjectPath.toLowerCase()] || {};
         return <ProjectEditorDialog project={proj} settings={settings} onSave={(s) => handleSaveProjectSettings(editingProjectPath, s)} onClose={() => setEditingProjectPath(null)} />;
       })()}
+      {updateDialogOpen && <UpdateDialog info={updateInfo} onDismiss={dismissUpdateDialog} />}
     </div>
   );
 }

@@ -25,6 +25,7 @@ interface SidebarProps {
   activeTabId: string;
   linkedProjectPath: string | null;
   showRateLimit: boolean;
+  updateAvailable: boolean;
 }
 
 function getInitials(name: string): string {
@@ -142,7 +143,7 @@ function targetsEqual(a: DropTarget, b: DropTarget): boolean {
   return false;
 }
 
-export function Sidebar({ projects, projectIcons, selectedProject, activeCountByProject, sidebarLayout, onLayoutChange, onSelectProject, onGoHome, onRemoveProject, onEditProject, onHoverProject, onOpenSettings, onAddProject, onCollapse, activeTabId, linkedProjectPath, showRateLimit }: SidebarProps) {
+export function Sidebar({ projects, projectIcons, selectedProject, activeCountByProject, sidebarLayout, onLayoutChange, onSelectProject, onGoHome, onRemoveProject, onEditProject, onHoverProject, onOpenSettings, onAddProject, onCollapse, activeTabId, linkedProjectPath, showRateLimit, updateAvailable }: SidebarProps) {
   const [ctx, setCtx] = useState<CtxState>(null);
   const [tooltip, setTooltip] = useState<{ text: string; rect: DOMRect } | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -539,8 +540,9 @@ export function Sidebar({ projects, projectIcons, selectedProject, activeCountBy
             this on in Settings. */}
         {showRateLimit && <RateLimitIndicator />}
 
-        <div className={`ds-item ${isSettingsActive ? "active" : ""}`} onClick={onOpenSettings} onMouseEnter={(e) => showTooltip("Settings", e.currentTarget)} onMouseLeave={hideTooltip}>
+        <div className={`ds-item ${isSettingsActive ? "active" : ""}`} onClick={onOpenSettings} onMouseEnter={(e) => showTooltip(updateAvailable ? "Settings — update available" : "Settings", e.currentTarget)} onMouseLeave={hideTooltip}>
           <div className="ds-icon ds-settings"><Settings size={16} /></div>
+          {updateAvailable && <div className="ds-settings-update-badge" title="Update available">+1</div>}
           <div className="ds-indicator" />
         </div>
       </div>
