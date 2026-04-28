@@ -62,9 +62,9 @@ Built with Tauri 2 and Rust. Native on Windows, macOS, and Linux.
 
 | Platform | File |
 | --- | --- |
-| Windows | `xshell_<version>_x64.msi` |
+| Windows | `xshell_<version>_x64_en-US.msi` or `xshell_<version>_x64-setup.exe` |
 | macOS | `xshell_<version>_universal.dmg` |
-| Linux | `.deb`, `.rpm`, or `.AppImage` |
+| Linux | `xshell_<version>_amd64.deb`, `xshell-<version>-1.x86_64.rpm`, or `xshell_<version>_amd64.AppImage` |
 
 The `claude` CLI must be installed and on `PATH`.
 
