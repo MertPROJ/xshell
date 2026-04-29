@@ -359,13 +359,15 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 /* Project Cards */
 .project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
 
-.project-card { background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 12px; cursor: pointer; transition: all 0.15s ease; }
+/* min-width:0 lets the grid/flex children clip; without it, unbreakable content forces
+   the column wider than minmax(200px, 1fr) and the path/name spill outside the card. */
+.project-card { background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 12px; cursor: pointer; transition: all 0.15s ease; min-width: 0; }
 .project-card:hover { border-color: var(--border-strong); background: var(--bg-hover); }
 
-.project-card-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.project-card-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; min-width: 0; }
 .project-card-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-terracotta); flex-shrink: 0; }
-.project-card-name { font-size: 12px; font-weight: 500; color: var(--text-primary); }
-.project-card-tag { font-size: 9px; color: var(--text-muted); background: var(--bg-elevated); padding: 1px 5px; border-radius: 3px; margin-left: auto; }
+.project-card-name { font-size: 12px; font-weight: 500; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.project-card-tag { font-size: 9px; color: var(--text-muted); background: var(--bg-elevated); padding: 1px 5px; border-radius: 3px; margin-left: auto; flex-shrink: 0; }
 
 .project-card-path { font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
