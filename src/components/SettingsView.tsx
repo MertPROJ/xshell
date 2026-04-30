@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Paintbrush, Terminal as TerminalIcon, Settings as SettingsIcon, RotateCcw, Sparkles, Info, ExternalLink, RefreshCw, CheckCircle2 } from "lucide-react";
+import { Paintbrush, Terminal as TerminalIcon, Settings as SettingsIcon, RotateCcw, Sparkles, Info, ExternalLink, RefreshCw, CheckCircle2, Download } from "lucide-react";
 import { getAvailableShells } from "../shells";
 import { ShellIcon } from "./ShellIcon";
 import { useTooltip, ttProps } from "./Tooltip";
 import { DetailedSessionInfoWizard } from "./DetailedSessionInfoWizard";
 import { DARK_TERM_BG, LIGHT_TERM_BG } from "./TerminalTab";
 import type { UpdateInfo } from "../hooks/useUpdateCheck";
+import { renderMarkdown } from "../markdown";
 
 export type ThemeMode = "dark" | "light";
 
@@ -228,15 +229,22 @@ export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanel
                   <button className="btn btn-ghost settings-action-btn" onClick={updateInfo.refresh} disabled={updateInfo.loading} {...ttProps(tt, "Re-check GitHub Releases")}><RefreshCw size={11} /> Refresh</button>
                 </div>
               </SettingRow>
-              {updateInfo.updateAvailable && updateInfo.releaseUrl && (
-                <SettingRow title="Update" description="Install via npm (npm i -g xshell-app@latest) or download the binary from the release page.">
-                  <button className="btn btn-ghost settings-action-btn" onClick={() => invoke("open_url", { url: updateInfo.releaseUrl! }).catch(() => {})}><ExternalLink size={11} /> View release</button>
+              {updateInfo.updateAvailable && (
+                <SettingRow title="Update" description={updateInfo.installMethod === "npm" ? "Closes xshell, runs npm i -g xshell-app@latest in a console window, then relaunches automatically." : "Install via npm (npm i -g xshell-app@latest) or download the binary from the release page."}>
+                  <div className="settings-version-row">
+                    {updateInfo.releaseUrl && (
+                      <button className="btn btn-ghost settings-action-btn" onClick={() => invoke("open_url", { url: updateInfo.releaseUrl! }).catch(() => {})}><ExternalLink size={11} /> View release</button>
+                    )}
+                    {updateInfo.installMethod === "npm" && (
+                      <button className="btn btn-primary settings-action-btn" onClick={() => invoke("run_npm_update").catch(() => {})}><Download size={11} /> Install update</button>
+                    )}
+                  </div>
                 </SettingRow>
               )}
               {updateInfo.updateAvailable && updateInfo.releaseNotes && (
                 <div className="settings-release-notes">
                   <div className="settings-release-notes-head">Release notes — v{updateInfo.latestVersion}</div>
-                  <pre className="settings-release-notes-body">{updateInfo.releaseNotes}</pre>
+                  <div className="settings-release-notes-body md-content">{renderMarkdown(updateInfo.releaseNotes)}</div>
                 </div>
               )}
             </Section>

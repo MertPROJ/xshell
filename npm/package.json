@@ -36,7 +36,8 @@
     "xshell": "bin/xshell.js"
   },
   "scripts": {
-    "postinstall": "node scripts/install.js"
+    "postinstall": "node scripts/install.js",
+    "preuninstall": "node scripts/uninstall.js"
   },
   "files": [
     "bin/",

@@ -14,6 +14,66 @@ const VERSION = pkg.version;
 const REPO = 'MertPROJ/xshell';
 const INSTALL_DIR = path.join(os.homedir(), '.xshell', 'bin');
 
+// ── Shortcut helpers ─────────────────────────────────────────────────
+// On Windows we drop a .lnk in the per-user Start Menu so xshell shows up in the Start search.
+// On Linux we write a .desktop file. macOS app bundles need a real Finder alias (symlinks
+// don't always behave the same), so we skip it for now — npm-installed mac users keep
+// launching via the `xshell` command.
+function createWindowsShortcut(targetExe) {
+  if (!process.env.APPDATA) return;
+  const startMenu = path.join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs');
+  fs.mkdirSync(startMenu, { recursive: true });
+  const linkPath = path.join(startMenu, 'xshell.lnk');
+  // PowerShell COM is the only built-in way to write a .lnk. We escape single quotes by
+  // doubling them, per PowerShell's literal-string rules.
+  const esc = (s) => s.replace(/'/g, "''");
+  const ps = `$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut('${esc(linkPath)}')
+$Shortcut.TargetPath = '${esc(targetExe)}'
+$Shortcut.IconLocation = '${esc(targetExe)},0'
+$Shortcut.WorkingDirectory = '${esc(path.dirname(targetExe))}'
+$Shortcut.Description = 'A native home for your Claude Code sessions'
+$Shortcut.Save()`;
+  const tmp = path.join(os.tmpdir(), `xshell-shortcut-${Date.now()}.ps1`);
+  fs.writeFileSync(tmp, ps, 'utf8');
+  try {
+    execSync(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${tmp}"`, { stdio: 'ignore' });
+    console.log(`xshell-app: created Start Menu shortcut at ${linkPath}`);
+  } finally {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+  }
+}
+
+function createLinuxDesktop(targetExe) {
+  const dir = path.join(os.homedir(), '.local', 'share', 'applications');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'xshell.desktop');
+  const contents = `[Desktop Entry]
+Type=Application
+Name=xshell
+GenericName=Claude Code Terminal
+Comment=A native home for your Claude Code sessions
+Exec=${targetExe}
+Icon=${targetExe}
+Terminal=false
+Categories=Development;TerminalEmulator;
+StartupWMClass=xshell
+`;
+  fs.writeFileSync(file, contents, 'utf8');
+  try { fs.chmodSync(file, 0o755); } catch (_) {}
+  console.log(`xshell-app: created application entry at ${file}`);
+}
+
+function createShortcuts(targetExe) {
+  try {
+    if (process.platform === 'win32') createWindowsShortcut(targetExe);
+    else if (process.platform === 'linux') createLinuxDesktop(targetExe);
+  } catch (e) {
+    // Shortcut creation is a nice-to-have; a failure shouldn't break the install.
+    console.warn(`xshell-app: could not create shortcut (${e.message}).`);
+  }
+}
+
 function pickAsset() {
   const platform = process.platform;
   const arch = process.arch;
@@ -76,19 +136,24 @@ async function main() {
   console.log(`xshell-app: downloading ${asset.name}…`);
   await download(url, downloadPath);
 
+  let installedExe = null;
   if (asset.kind === 'appimage') {
     const target = path.join(INSTALL_DIR, 'xshell');
     fs.renameSync(downloadPath, target);
     fs.chmodSync(target, 0o755);
+    installedExe = target;
   } else if (asset.kind === 'targz') {
     // macOS has tar built-in; extract xshell.app into INSTALL_DIR.
     execSync(`tar -xzf "${downloadPath}" -C "${INSTALL_DIR}"`);
     fs.unlinkSync(downloadPath);
+    installedExe = path.join(INSTALL_DIR, 'xshell.app');
   } else if (asset.kind === 'exe') {
-    fs.renameSync(downloadPath, path.join(INSTALL_DIR, 'xshell.exe'));
+    installedExe = path.join(INSTALL_DIR, 'xshell.exe');
+    fs.renameSync(downloadPath, installedExe);
   }
 
   console.log(`xshell-app: installed to ${INSTALL_DIR}`);
+  if (installedExe) createShortcuts(installedExe);
   console.log('Run with:  xshell');
 }
 
