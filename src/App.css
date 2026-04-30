@@ -16,6 +16,11 @@
   --text-tertiary: #87867f;
   --text-muted: #5e5d59;
 
+  /* Icon-only accent: lifts low-emphasis chrome controls (tab actions, sidebar add /
+     collapse / settings) above text-muted so they're easier to spot on the dark
+     surface, without brightening the dozens of secondary text uses of text-muted. */
+  --icon-bright: #c2bfba;
+
   /* Brand */
   --accent-terracotta: #c96442;
   --accent-coral: #d97757;
@@ -70,6 +75,10 @@
   --border-subtle: #f0eee6;
   --border-default: #e8e6dc;
   --border-strong: #d1cfc5;
+
+  /* Light theme keeps the icons at the regular muted tone — the dark-theme lift
+     was a contrast fix that doesn't apply against the parchment background. */
+  --icon-bright: var(--text-muted);
 }
 
 /* ── Reset & Base ─────────────────────────────────────────────────── */
@@ -113,15 +122,15 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .ds-item:hover .ds-project { background: var(--bg-active); color: var(--text-primary); }
 .ds-item.active .ds-project { color: var(--text-primary); }
 
-.ds-add { background: var(--bg-card); color: var(--text-muted); }
+.ds-add { background: var(--bg-card); color: var(--icon-bright); }
 .ds-item:hover .ds-add { background: var(--accent-terracotta-dim); color: var(--accent-coral); }
 
 .ds-project-img { width: 100%; height: 100%; object-fit: cover; border-radius: 14px; -webkit-user-drag: none; user-select: none; pointer-events: none; }
 
-.ds-settings { background: var(--bg-card); color: var(--text-muted); width: 36px; height: 36px; border-radius: 10px; }
+.ds-settings { background: var(--bg-card); color: var(--icon-bright); width: 36px; height: 36px; border-radius: 10px; }
 .ds-item:hover .ds-settings { background: var(--bg-active); color: var(--text-secondary); }
 .ds-item.active .ds-settings { background: var(--accent-terracotta); color: var(--text-primary); }
-.ds-collapse-icon { background: transparent; color: var(--text-muted); width: 36px; height: 24px; border-radius: 8px; }
+.ds-collapse-icon { background: transparent; color: var(--icon-bright); width: 36px; height: 24px; border-radius: 8px; }
 .ds-item:hover .ds-collapse-icon { background: var(--bg-hover); color: var(--text-primary); }
 .ds-collapse { margin-bottom: 2px; }
 
@@ -286,7 +295,7 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 /* Tab action buttons (+ and chevron) */
 .tab-actions { display: flex; align-items: center; gap: 2px; padding: 0 4px; flex-shrink: 0; }
 
-.tab-action-btn { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer; transition: all 0.1s; }
+.tab-action-btn { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--icon-bright); cursor: pointer; transition: all 0.1s; }
 .tab-action-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .tab-action-btn.active { background: var(--bg-active); color: var(--text-primary); }
 
