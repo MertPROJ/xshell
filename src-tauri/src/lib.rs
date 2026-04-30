@@ -69,10 +69,12 @@ fn get_claude_projects_dir() -> Option<PathBuf> {
 }
 
 // Mirror Claude Code's encoding of a project path into the directory name under
-// `~/.claude/projects/`. Non-alphanumeric characters (except `.` and `_`) collapse to `-`.
+// `~/.claude/projects/`. Every non-alphanumeric character collapses to `-` — including
+// `.` and `_`, which Claude Code also converts (e.g. `CalcApps.Framework` →
+// `CalcApps-Framework`, `SSY2_Lab` → `SSY2-Lab`).
 // e.g. `C:\Users\alex\projects\my-app`  →  `C--Users-alex-projects-my-app`
 fn encode_project_name(cwd: &str) -> String {
-    cwd.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' { c } else { '-' }).collect()
+    cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
 }
 
 fn system_time_to_iso(time: SystemTime) -> String {
