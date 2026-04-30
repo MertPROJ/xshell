@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 use tauri::{AppHandle, Emitter, State};
 
@@ -103,11 +103,47 @@ fn system_time_to_iso(time: SystemTime) -> String {
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m + 1, d + 1, hours, minutes, seconds)
 }
 
+// Cached SessionInfo keyed by JSONL path. The cache is invalidated whenever the JSONL's
+// mtime changes (active session got a new turn) OR the xshell-stats sidecar's mtime
+// changes (cost/rate-limit refresh). Active sessions still re-parse on every tick — those
+// are 1-2 files. Idle sessions cost only two stat() calls. Drops the title-sync poll cost
+// from "parse every JSONL in the project every 5s" (tens of MB) to a few syscalls.
+struct SessionCacheEntry {
+    jsonl_mtime: SystemTime,
+    stats_mtime: Option<SystemTime>,
+    project_path: String,
+    info: SessionInfo,
+}
+
+fn session_cache() -> &'static Mutex<HashMap<PathBuf, SessionCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, SessionCacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn stats_path_for(session_id: &str) -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".claude").join("xshell-stats").join(format!("{}.json", session_id)))
+}
+
 fn parse_session(path: &std::path::Path, project_name: &str, project_path: &str) -> Option<SessionInfo> {
     let session_id = path.file_stem()?.to_string_lossy().to_string();
     let metadata = fs::metadata(path).ok()?;
     let modified = metadata.modified().ok()?;
     let mtime_iso = system_time_to_iso(modified);
+
+    // Stats-file mtime (sidecar from the xshell-stats statusline hook). May not exist —
+    // None is a valid cache key value, so a session without stats stays cached cleanly.
+    let stats_mtime = stats_path_for(&session_id)
+        .and_then(|p| fs::metadata(&p).ok())
+        .and_then(|m| m.modified().ok());
+
+    // Cache lookup — return clone if all three keys match (jsonl mtime, stats mtime, project_path).
+    if let Ok(cache) = session_cache().lock() {
+        if let Some(entry) = cache.get(path) {
+            if entry.jsonl_mtime == modified && entry.stats_mtime == stats_mtime && entry.project_path == project_path {
+                return Some(entry.info.clone());
+            }
+        }
+    }
 
     let file = fs::File::open(path).ok()?;
     let reader = BufReader::new(file);
@@ -302,7 +338,11 @@ fn parse_session(path: &std::path::Path, project_name: &str, project_path: &str)
     // that haven't produced a user/assistant line yet.
     let timestamp = if last_message_ts.is_empty() { mtime_iso } else { last_message_ts };
 
-    Some(SessionInfo { id: session_id, title: display_title, timestamp, message_count, project_name: project_name.to_string(), project_path: project_path.to_string(), git_branch, claude_version, tool_use_count, duration_ms, model: model_out, context_tokens, context_limit, cost_usd, is_authoritative_stats, daily_cost, rate_limit_5h_pct, rate_limit_7d_pct })
+    let info = SessionInfo { id: session_id, title: display_title, timestamp, message_count, project_name: project_name.to_string(), project_path: project_path.to_string(), git_branch, claude_version, tool_use_count, duration_ms, model: model_out, context_tokens, context_limit, cost_usd, is_authoritative_stats, daily_cost, rate_limit_5h_pct, rate_limit_7d_pct };
+    if let Ok(mut cache) = session_cache().lock() {
+        cache.insert(path.to_path_buf(), SessionCacheEntry { jsonl_mtime: modified, stats_mtime, project_path: project_path.to_string(), info: info.clone() });
+    }
+    Some(info)
 }
 
 // ── Commands ───────────────────────────────────────────────────────────
