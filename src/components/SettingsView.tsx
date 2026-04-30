@@ -28,6 +28,8 @@ interface SettingsViewProps {
   onSetAlwaysOnTop: (value: boolean) => void;
   defaultShell: string;
   onSetDefaultShell: (shellId: string) => void;
+  fullscreenRendering: boolean;
+  onSetFullscreenRendering: (enabled: boolean) => void;
   showRateLimitInSidebar: boolean;
   onSetShowRateLimitInSidebar: (enabled: boolean) => void;
   showSessionRowMetrics: boolean;
@@ -80,7 +82,7 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanelEnabled, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, updateInfo }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanelEnabled, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
@@ -181,6 +183,12 @@ export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanel
                       {shells.map(sh => <option key={sh.id} value={sh.id}>{sh.name}</option>)}
                     </select>
                   </div>
+                </SettingRow>
+              </Section>
+
+              <Section title="Claude Code" description="Tweaks applied to every Claude session launched from xshell.">
+                <SettingRow title="Full screen rendering" description="Switch Claude Code into the alternate-screen-buffer renderer (no scrollback, no flicker on every refresh). Sets CLAUDE_CODE_NO_FLICKER=1 on each new claude session — open sessions keep their current mode until next launch.">
+                  <Toggle checked={fullscreenRendering} onChange={onSetFullscreenRendering} />
                 </SettingRow>
               </Section>
 

@@ -95,6 +95,10 @@ export default function App() {
   const [terminalBgColor, setTerminalBgColor] = useState("#1c1c1b");
   const [defaultTerminalFontSize, setDefaultTerminalFontSize] = useState(12);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+  // Sets CLAUDE_CODE_NO_FLICKER=1 on every claude session so it uses the alternate-screen
+  // buffer renderer. Default ON — flicker-free is what most users want; only flip if the
+  // user wants scrollback-style output (or hits a renderer bug).
+  const [fullscreenRendering, setFullscreenRendering] = useState(true);
   const [defaultShell, setDefaultShell] = useState<string>(getDefaultShellId());
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [showProjectPicker, setShowProjectPicker] = useState(false);
@@ -121,7 +125,7 @@ export default function App() {
     (async () => {
       try {
         const store = await load("settings.json", { defaults: {}, autoSave: true });
-        const [paths, icons, savedTabs, savedGroups, gitEnabled, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme] = await Promise.all([
+        const [paths, icons, savedTabs, savedGroups, gitEnabled, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender] = await Promise.all([
           store.get<string[]>("project_paths"),
           store.get<Record<string, ProjectSettings>>("project_icons"),
           store.get<Tab[]>("open_tabs"),
@@ -137,6 +141,7 @@ export default function App() {
           store.get<boolean>("rate_limit_in_sidebar"),
           store.get<boolean>("session_row_metrics"),
           store.get<ThemeMode>("theme"),
+          store.get<boolean>("fullscreen_rendering_enabled"),
         ]);
         // Layout: prefer the explicit `sidebar_layout` if present; otherwise migrate
         // from the flat `project_paths` list by wrapping each path in a project item.
@@ -161,6 +166,7 @@ export default function App() {
         if (typeof rlSidebar === "boolean") setShowRateLimitInSidebar(rlSidebar);
         if (typeof rowMetrics === "boolean") setShowSessionRowMetrics(rowMetrics);
         if (typeof gitNamesOnly === "boolean") setGitPanelFilenamesOnly(gitNamesOnly);
+        if (typeof fsRender === "boolean") setFullscreenRendering(fsRender);
         if (storedTheme === "light" || storedTheme === "dark") setTheme(storedTheme);
         // Restore only tabs that have a real sessionId (not abandoned "New Chat" tabs)
         if (savedTabs?.length) {
@@ -370,6 +376,11 @@ export default function App() {
   const persistDefaultShell = useCallback(async (shellId: string) => {
     setDefaultShell(shellId);
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("default_shell", shellId); } catch (_) {}
+  }, []);
+
+  const persistFullscreenRendering = useCallback(async (enabled: boolean) => {
+    setFullscreenRendering(enabled);
+    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("fullscreen_rendering_enabled", enabled); } catch (_) {}
   }, []);
 
   // Apply synchronously alongside the React state change so the next paint already has
@@ -894,7 +905,7 @@ export default function App() {
         <TabBar tabs={tabs} entries={entries} onRenameGroup={(id, name) => setGroups(prev => prev.map(g => g.id === id ? { ...g, name } : g))} closingTabIds={closingTabIds} activeTabId={activeTabId} selectedProject={selectedProject} hoveredProjectPath={hoveredProjectPath} linkedProjectPath={activeTabProjectPath} activeTabProject={contextProject} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} projectIcons={projectIcons} sidebarCollapsed={sidebarCollapsed} defaultShell={defaultShell} onExpandSidebar={() => setSidebarCollapsed(false)} onSelectTab={setActiveTabId} onCloseTab={handleCloseTab} onReorderTabs={handleReorderTabs} onNewChatInActive={handleNewChatInActive} onNewShellInContext={handleNewShellInContext} onOpenSession={handleOpenSession} onNewShell={handleNewShell} />
         {/* Settings view — hidden unless activeTabId === 'settings' */}
         <div style={{ display: showSettings ? "flex" : "none", flex: 1, overflow: "hidden" }}>
-          <SettingsView theme={theme} onSetTheme={persistTheme} gitPanelEnabled={gitPanelEnabled} onSetGitPanelEnabled={persistGitPanelEnabled} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} updateInfo={updateInfo} />
+          <SettingsView theme={theme} onSetTheme={persistTheme} gitPanelEnabled={gitPanelEnabled} onSetGitPanelEnabled={persistGitPanelEnabled} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} updateInfo={updateInfo} />
         </div>
         {/* Home view — hidden when a terminal tab is active */}
         <div style={{ display: showHome ? "flex" : "none", flex: 1, overflow: "hidden" }}>
@@ -967,7 +978,7 @@ export default function App() {
         {tabs.map(tab => {
           const host = ensureHost(tab.id);
           return createPortal(
-            <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitPanelEnabled={gitPanelEnabled} gitPanelFilenamesOnly={gitPanelFilenamesOnly} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} theme={theme} onBranchSwitch={handleSwitchTabToBranch} />,
+            <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitPanelEnabled={gitPanelEnabled} gitPanelFilenamesOnly={gitPanelFilenamesOnly} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} fullscreenRendering={fullscreenRendering} theme={theme} onBranchSwitch={handleSwitchTabToBranch} />,
             host,
           );
         })}

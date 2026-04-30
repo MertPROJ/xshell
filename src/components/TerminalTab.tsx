@@ -110,6 +110,7 @@ interface TerminalTabProps {
   terminalBgColor: string;
   defaultFontSize: number;
   defaultShellId: string;
+  fullscreenRendering: boolean;
   theme: ThemeMode;
   onBranchSwitch: (tabId: string, newSessionId: string, newTitle: string) => void;
 }
@@ -132,7 +133,7 @@ const MIN_PANEL = 200;
 const MAX_PANEL = 600;
 const DEFAULT_PANEL = 280;
 
-export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, theme, onBranchSwitch }: TerminalTabProps) {
+export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, theme, onBranchSwitch }: TerminalTabProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -290,7 +291,7 @@ export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesO
         // user's default shell setting, so claude runs under the shell the user picked.
         const effectiveShellId = tabRef.current.shellId || (shellMode === "claude" ? defaultShellId : null);
         const shellCommand = effectiveShellId ? (getShellById(effectiveShellId)?.command || null) : null;
-        await invoke("spawn_terminal", { id, sessionId: tabRef.current.sessionId || null, customName: tabRef.current.customName || null, cwd: tabRef.current.projectPath || ".", cols: term.cols, rows: term.rows, shellMode, shellCommand, shellId: effectiveShellId });
+        await invoke("spawn_terminal", { id, sessionId: tabRef.current.sessionId || null, customName: tabRef.current.customName || null, cwd: tabRef.current.projectPath || ".", cols: term.cols, rows: term.rows, shellMode, shellCommand, shellId: effectiveShellId, fullscreenRendering });
       } catch (err) {
         setError(String(err));
         term.write(`\x1b[31mFailed to start terminal: ${err}\x1b[0m\r\n`);

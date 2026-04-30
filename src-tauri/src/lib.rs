@@ -1376,7 +1376,7 @@ fn git_unstage(cwd: String, paths: Vec<String>) -> Result<(), String> {
 // ── Terminal / PTY Commands ────────────────────────────────────────────
 
 #[tauri::command]
-fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, session_id: Option<String>, custom_name: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>) -> Result<(), String> {
+fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, session_id: Option<String>, custom_name: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>, fullscreen_rendering: Option<bool>) -> Result<(), String> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| format!("Failed to open PTY: {}", e))?;
 
@@ -1455,6 +1455,12 @@ fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, sessio
         for a in &claude_args { c.arg(a); }
         c
     };
+    // Claude Code's flicker-free / alternate-screen-buffer renderer is opt-in via env var.
+    // Default ON for any claude-mode spawn; raw shells don't get it (no claude process to read it).
+    // Inherited by the wrapping shell → claude child, so setting it here is sufficient.
+    if mode != "raw" && fullscreen_rendering.unwrap_or(true) {
+        cmd.env("CLAUDE_CODE_NO_FLICKER", "1");
+    }
     // Empty cwd → fall back to the user's home directory (raw shells launched from home view).
     let effective_cwd = if cwd.is_empty() {
         dirs::home_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| ".".to_string())
