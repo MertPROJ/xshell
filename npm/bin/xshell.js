@@ -58,7 +58,16 @@ if (!binPath || !fs.existsSync(binPath)) {
   process.exit(1);
 }
 
-const child = spawn(binPath, args, { stdio: 'inherit' });
+// Tell the desktop app where the npm-side update helper lives + which Node binary to run
+// it with. The Tauri side reads these to decide whether to show the "Install update" button.
+const helperPath = path.join(__dirname, '..', 'scripts', 'update.js');
+const childEnv = { ...process.env };
+if (fs.existsSync(helperPath)) {
+  childEnv.XSHELL_UPDATE_HELPER = helperPath;
+  childEnv.XSHELL_NODE_PATH = process.execPath;
+}
+
+const child = spawn(binPath, args, { stdio: 'inherit', env: childEnv });
 child.on('error', (err) => {
   console.error('Failed to launch xshell:', err.message);
   process.exit(1);
