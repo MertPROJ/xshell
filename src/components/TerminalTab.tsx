@@ -139,6 +139,11 @@ export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesO
   const fitAddonRef = useRef<FitAddon | null>(null);
   const [_error, setError] = useState<string | null>(null);
   const tabRef = useRef(tab);
+  // Loading state: true from spawn until the PTY emits its first byte. That window covers
+  // Node.js boot + claude TUI first paint — the "blank screen" the user sees before claude
+  // is ready. Universal: works for fresh, --resume, and raw shells.
+  const [isInitializing, setIsInitializing] = useState(true);
+  const sawFirstOutputRef = useRef(false);
 
   const [showGitPanel, setShowGitPanel] = useState(false);
   const [gitPanelWidth, setGitPanelWidth] = useState(DEFAULT_PANEL);
@@ -237,13 +242,28 @@ export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesO
     containerRef.current.addEventListener("wheel", onWheel, { passive: false });
 
     // Restore persisted zoom for this tab, then kick off fit + backend spawn.
+    // Critical: wait until the container has non-zero, settled dimensions before fitting,
+    // otherwise xterm computes cols/rows from a partial layout and we hand claude wrong
+    // dimensions on spawn. Claude's Ink-based TUI then renders to that smaller box and
+    // doesn't fully redraw until a real SIGWINCH (e.g. when the user resizes the window).
+    // This is the "first render is too small" bug specific to xterm.js + ink CLIs.
     loadZoom(tabRef.current.id, defaultFontSizeRef.current).then(size => {
       fontSizeRef.current = size;
       term.options.fontSize = size;
-      requestAnimationFrame(() => {
-        fitAddon.fit();
-        spawnBackend(term, fitAddon);
-      });
+      const el = containerRef.current;
+      if (!el) return;
+      const tick = () => {
+        if (el.offsetWidth > 0 && el.offsetHeight > 0) {
+          // One extra rAF lets any pending flex/layout work flush before we measure.
+          requestAnimationFrame(() => {
+            fitAddon.fit();
+            spawnBackend(term, fitAddon);
+          });
+        } else {
+          requestAnimationFrame(tick);
+        }
+      };
+      tick();
     });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -270,10 +290,20 @@ export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesO
       const id = tabRef.current.id;
 
       const unlistenOutput = await listen<string>(`terminal-output-${id}`, (event) => {
+        if (!sawFirstOutputRef.current) {
+          sawFirstOutputRef.current = true;
+          setIsInitializing(false);
+        }
         term.write(event.payload);
       });
 
       const unlistenExit = await listen(`terminal-exit-${id}`, () => {
+        // Spawn failed before any output (e.g. claude not on PATH) — drop the loader so
+        // the error message we're about to write isn't hidden behind it.
+        if (!sawFirstOutputRef.current) {
+          sawFirstOutputRef.current = true;
+          setIsInitializing(false);
+        }
         term.write("\r\n\x1b[90m[Session ended]\x1b[0m\r\n");
       });
 
@@ -292,8 +322,21 @@ export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesO
         const effectiveShellId = tabRef.current.shellId || (shellMode === "claude" ? defaultShellId : null);
         const shellCommand = effectiveShellId ? (getShellById(effectiveShellId)?.command || null) : null;
         await invoke("spawn_terminal", { id, sessionId: tabRef.current.sessionId || null, customName: tabRef.current.customName || null, cwd: tabRef.current.projectPath || ".", cols: term.cols, rows: term.rows, shellMode, shellCommand, shellId: effectiveShellId, fullscreenRendering });
+        // Post-spawn nudge for ink-based TUIs (claude code). Some Ink renderers ignore the
+        // very first SIGWINCH if it arrives mid-bootstrap; a delayed re-fit + forced PTY
+        // resize ensures the final cols/rows are picked up cleanly even if xterm's own
+        // dimensions haven't changed (in which case onResize wouldn't fire on its own).
+        setTimeout(() => {
+          if (!terminalRef.current || !fitAddonRef.current) return;
+          fitAddonRef.current.fit();
+          invoke("resize_terminal", { id, cols: terminalRef.current.cols, rows: terminalRef.current.rows }).catch(() => {});
+        }, 250);
       } catch (err) {
         setError(String(err));
+        // Locally-written errors don't go through the terminal-output event, so the
+        // loader wouldn't auto-clear. Dismiss it here so the message is visible.
+        sawFirstOutputRef.current = true;
+        setIsInitializing(false);
         term.write(`\x1b[31mFailed to start terminal: ${err}\x1b[0m\r\n`);
         if ((tabRef.current.shellMode || "claude") === "claude") {
           term.write(`\x1b[90mMake sure 'claude' is installed and available in your PATH.\x1b[0m\r\n`);
@@ -598,7 +641,14 @@ export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesO
         </div>
       )}
       <div className="terminal-body">
-        <div className="terminal-container" ref={containerRef} style={{ background: paletteFor(theme, terminalBgColor).background }} />
+        <div className="terminal-container" ref={containerRef} style={{ background: paletteFor(theme, terminalBgColor).background }}>
+          {isInitializing && (
+            <div className="terminal-loading-overlay">
+              <div className="spinner" />
+              <span>{isClaudeSession ? "Starting Claude…" : "Starting shell…"}</span>
+            </div>
+          )}
+        </div>
         {gitPanelEnabled && isClaudeSession && showGitPanel && gitStatus?.is_repo && (
           <>
             <div className="terminal-splitter" onPointerDown={onSplitterDown} onMouseEnter={(e) => showTt("Drag to resize", e.currentTarget)} onMouseLeave={hideTt} />
