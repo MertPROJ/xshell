@@ -16,16 +16,14 @@
 
 > Independent project. Not affiliated with, endorsed by, or a product of Anthropic. xshell reads files written by the official `claude` CLI and spawns it as a subprocess. "Claude" and "Claude Code" are trademarks of Anthropic, PBC.
 
-## Screenshots
+## Preview
 
 <p align="center">
-  <img src="docs/screenshots/dashboard.png" alt="Project overview with daily cost chart, sessions list, and context tree" width="100%">
-  <br><sub><em>Project overview — daily cost across the last 30 days, every session in one list, full context tree on the right.</em></sub>
+  <img src="docs/xshell-demo.gif" alt="xshell demo" width="100%">
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/terminal.png" alt="Claude Code session inside an xshell terminal tab with the inline git panel" width="100%">
-  <br><sub><em>Claude Code session inside an xshell tab — inline git panel, live cost / context indicators in the status line.</em></sub>
+  🌐 <a href="https://xshell.sh"><strong>xshell.sh</strong></a>
 </p>
 
 ## Why this exists
