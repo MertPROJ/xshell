@@ -2,7 +2,8 @@ import type { ShellPreset } from "./types";
 
 // Known shell presets. `command` is passed straight to the OS PTY spawn.
 export const SHELL_PRESETS: ShellPreset[] = [
-  { id: "powershell",  name: "PowerShell",       command: "powershell.exe", platforms: ["windows"] },
+  { id: "powershell",  name: "Windows PowerShell", command: "powershell.exe", platforms: ["windows"] },
+  { id: "pwsh",        name: "PowerShell 7",     command: "pwsh",           platforms: ["windows", "macos", "linux"] },
   { id: "cmd",         name: "Command Prompt",   command: "cmd.exe",        platforms: ["windows"] },
   { id: "gitbash",     name: "Git Bash",         command: "bash.exe",       platforms: ["windows"] },
   { id: "bash",        name: "Bash",             command: "bash",           platforms: ["macos", "linux"] },

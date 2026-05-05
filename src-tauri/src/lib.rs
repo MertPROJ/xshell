@@ -1135,49 +1135,6 @@ fn reveal_in_explorer(path: String) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct UpdateMethod {
-    pub method: String,
-    pub helper: Option<String>,
-    pub node: Option<String>,
-}
-
-// Detected from env vars set by the npm wrapper (npm/bin/xshell.js). When both are present
-// we know we were launched through the npm install path, and the helper script + Node binary
-// give us everything needed to run an in-app update without the user touching a shell.
-#[tauri::command]
-fn detect_update_method() -> UpdateMethod {
-    let helper = std::env::var("XSHELL_UPDATE_HELPER").ok();
-    let node = std::env::var("XSHELL_NODE_PATH").ok();
-    let method = if helper.is_some() && node.is_some() { "npm" } else { "manual" };
-    UpdateMethod { method: method.to_string(), helper, node }
-}
-
-// Spawns the npm update helper detached, then exits the app a beat later so the .exe lock
-// is released. The helper waits for our PID, runs `npm i -g xshell-app@latest`, and relaunches.
-#[tauri::command]
-fn run_npm_update(app: tauri::AppHandle) -> Result<(), String> {
-    let helper = std::env::var("XSHELL_UPDATE_HELPER").map_err(|_| "no update helper available".to_string())?;
-    let node = std::env::var("XSHELL_NODE_PATH").map_err(|_| "no node path available".to_string())?;
-    let pid = std::process::id().to_string();
-    let mut cmd = std::process::Command::new(&node);
-    cmd.arg(&helper).arg(&pid);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP — give the helper its own visible
-        // console (so the user sees npm progress) and let it survive our exit.
-        cmd.creation_flags(0x10 | 0x200);
-    }
-    cmd.spawn().map_err(|e| format!("Failed to spawn update helper: {}", e))?;
-    let app_clone = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        app_clone.exit(0);
-    });
-    Ok(())
-}
-
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     use std::process::Command;
@@ -1498,7 +1455,7 @@ fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, sessio
         // Claude mode with an explicit host shell: launch the shell and run `claude` inside it
         // so the user's preferred shell wraps the session (and stays alive after claude exits).
         match shell_kind {
-            "powershell" => {
+            "powershell" | "pwsh" => {
                 let mut c = CommandBuilder::new(shell);
                 c.arg("-NoLogo");
                 c.arg("-NoExit");
@@ -1758,7 +1715,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(AppState { terminals: Mutex::new(HashMap::new()) })
-        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, open_url, detect_update_method, run_npm_update, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, spawn_terminal, write_terminal, resize_terminal, close_terminal])
+        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, spawn_terminal, write_terminal, resize_terminal, close_terminal])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

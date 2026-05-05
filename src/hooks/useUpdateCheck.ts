@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/core";
 
 const REPO = "MertPROJ/xshell";
-
-// "npm" → launched via the npm wrapper, in-app `npm i -g` update is wired up.
-// "manual" → installed via .msi/.exe/etc.; user updates manually.
-export type InstallMethod = "npm" | "manual";
 
 export interface UpdateInfo {
   currentVersion: string;
@@ -15,7 +10,6 @@ export interface UpdateInfo {
   releaseUrl: string | null;
   releaseNotes: string | null;
   publishedAt: string | null;
-  installMethod: InstallMethod;
   loading: boolean;
   error: string | null;
   refresh: () => void;
@@ -46,17 +40,9 @@ export function useUpdateCheck(): UpdateInfo {
   const [releaseUrl, setReleaseUrl] = useState<string | null>(null);
   const [releaseNotes, setReleaseNotes] = useState<string | null>(null);
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
-  const [installMethod, setInstallMethod] = useState<InstallMethod>("manual");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
-
-  // Install method is detected once on mount — it doesn't change while the app is running.
-  useEffect(() => {
-    invoke<{ method: string }>("detect_update_method")
-      .then(r => setInstallMethod(r.method === "npm" ? "npm" : "manual"))
-      .catch(() => setInstallMethod("manual"));
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,5 +72,5 @@ export function useUpdateCheck(): UpdateInfo {
 
   const refresh = useCallback(() => setTick(t => t + 1), []);
   const updateAvailable = !!latestVersion && !!currentVersion && cmpSemver(latestVersion, currentVersion) > 0;
-  return { currentVersion, latestVersion, updateAvailable, releaseUrl, releaseNotes, publishedAt, installMethod, loading, error, refresh };
+  return { currentVersion, latestVersion, updateAvailable, releaseUrl, releaseNotes, publishedAt, loading, error, refresh };
 }

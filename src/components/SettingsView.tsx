@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Paintbrush, Terminal as TerminalIcon, Settings as SettingsIcon, RotateCcw, Sparkles, Info, ExternalLink, RefreshCw, CheckCircle2, Download } from "lucide-react";
+import { Paintbrush, Terminal as TerminalIcon, Settings as SettingsIcon, RotateCcw, Sparkles, Info, ExternalLink, RefreshCw, CheckCircle2 } from "lucide-react";
 import { getAvailableShells } from "../shells";
 import { ShellIcon } from "./ShellIcon";
 import { useTooltip, ttProps } from "./Tooltip";
@@ -8,6 +8,8 @@ import { DetailedSessionInfoWizard } from "./DetailedSessionInfoWizard";
 import { DARK_TERM_BG, LIGHT_TERM_BG } from "./TerminalTab";
 import type { UpdateInfo } from "../hooks/useUpdateCheck";
 import { renderMarkdown } from "../markdown";
+import { detectInstallCommand } from "../installCommand";
+import { CodeCopy } from "./CodeCopy";
 
 export type ThemeMode = "dark" | "light";
 
@@ -242,7 +244,7 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
           )}
 
           {active === "about" && (
-            <Section title="Version" description="xshell ships via GitHub Releases (binary installer) and npm. The check below queries GitHub Releases for the latest tagged version.">
+            <Section title="Version" description="xshell ships via GitHub Releases. The check below queries GitHub for the latest tagged release.">
               <SettingRow title="Installed version" description="The version of xshell currently running. Comes from the bundled tauri.conf.json — restart the app after updating.">
                 <span className="settings-version-current">{updateInfo.currentVersion || "—"}</span>
               </SettingRow>
@@ -266,13 +268,11 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                 </div>
               </SettingRow>
               {updateInfo.updateAvailable && (
-                <SettingRow title="Update" description={updateInfo.installMethod === "npm" ? "Closes xshell, runs npm i -g xshell-app@latest in a console window, then relaunches automatically." : "Install via npm (npm i -g xshell-app@latest) or download the binary from the release page."}>
+                <SettingRow title="Update" description="Run the install script to update in place, or download the binary from the release page.">
                   <div className="settings-version-row">
+                    <CodeCopy text={detectInstallCommand().command} />
                     {updateInfo.releaseUrl && (
                       <button className="btn btn-ghost settings-action-btn" onClick={() => invoke("open_url", { url: updateInfo.releaseUrl! }).catch(() => {})}><ExternalLink size={11} /> View release</button>
-                    )}
-                    {updateInfo.installMethod === "npm" && (
-                      <button className="btn btn-primary settings-action-btn" onClick={() => invoke("run_npm_update").catch(() => {})}><Download size={11} /> Install update</button>
                     )}
                   </div>
                 </SettingRow>
