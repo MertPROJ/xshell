@@ -57,7 +57,9 @@ export function QuickActionsDialog({ tabs, activeTabId, projectIcons, pinnedProj
   const ref = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<View>("tabs");
+  // Default to the Actions view when there are no tabs to switch between — otherwise
+  // the user lands on an empty list with a "No active tabs" message.
+  const [view, setView] = useState<View>(tabs.length === 0 ? "actions" : "tabs");
   const [query, setQuery] = useState("");
   const [highlightIdx, setHighlightIdx] = useState(0);
 

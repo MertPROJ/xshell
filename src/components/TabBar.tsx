@@ -354,12 +354,10 @@ export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProj
 
       <div className="tab-bar-drag" data-tauri-drag-region />
 
-      {tabs.length > 0 && (
-        <button className={`tb-search-btn ${searchOpen ? "active" : ""}`} onClick={() => setSearchOpen(v => !v)} onMouseEnter={(e) => showTooltip(`Quick Actions (${shortcutLabel})`, e.currentTarget)} onMouseLeave={hideTooltip} aria-label="Quick Actions">
-          <Command size={13} />
-          <span className="tb-search-kbd">{shortcutLabel}</span>
-        </button>
-      )}
+      <button className={`tb-search-btn ${searchOpen ? "active" : ""}`} onClick={() => setSearchOpen(v => !v)} onMouseEnter={(e) => showTooltip(`Quick Actions (${shortcutLabel})`, e.currentTarget)} onMouseLeave={hideTooltip} aria-label="Quick Actions">
+        <Command size={13} />
+        <span className="tb-search-kbd">{shortcutLabel}</span>
+      </button>
 
       <div className="window-controls">
         <button className="wc-btn" onClick={() => appWindow.minimize()}><Minus size={13} /></button>
