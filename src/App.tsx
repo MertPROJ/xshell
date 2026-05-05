@@ -977,8 +977,14 @@ export default function App() {
             position without triggering an unmount — the xterm and PTY keep running. */}
         {tabs.map(tab => {
           const host = ensureHost(tab.id);
+          // Look up the encoded claude-projects dir name for this tab's project so the
+          // TerminalTab can pull cost/context stats. Empty string when the project hasn't
+          // been seen by claude yet — TerminalTab handles that by hiding the stats strip.
+          const encodedName = tab.projectPath
+            ? (allProjects.find(p => p.path.toLowerCase() === tab.projectPath!.toLowerCase())?.encoded_name || "")
+            : "";
           return createPortal(
-            <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitPanelEnabled={gitPanelEnabled} gitPanelFilenamesOnly={gitPanelFilenamesOnly} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} fullscreenRendering={fullscreenRendering} theme={theme} onBranchSwitch={handleSwitchTabToBranch} />,
+            <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitPanelEnabled={gitPanelEnabled} gitPanelFilenamesOnly={gitPanelFilenamesOnly} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} fullscreenRendering={fullscreenRendering} theme={theme} projectEncodedName={encodedName} onBranchSwitch={handleSwitchTabToBranch} />,
             host,
           );
         })}

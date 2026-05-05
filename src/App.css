@@ -494,14 +494,19 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .terminal-loading-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-tertiary); font-size: 11px; font-family: var(--font-mono); z-index: 5; pointer-events: none; animation: fadeIn 0.18s ease-out; }
 
 /* ── Git indicator (in terminal header) ──────────────────────────── */
-.terminal-git-indicator { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 2px 6px; background: transparent; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s; }
-.terminal-git-indicator:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-strong); }
-.terminal-git-indicator.active { background: var(--bg-active); color: var(--text-primary); border-color: var(--border-strong); }
-.terminal-git-branch { font-weight: 500; }
-.terminal-git-ab { display: inline-flex; align-items: center; gap: 1px; color: var(--text-tertiary); }
-.terminal-git-dot { color: var(--accent-terracotta); font-size: 8px; display: inline-flex; align-items: center; gap: 2px; }
-.terminal-git-chev { transition: transform 0.18s; color: var(--text-muted); }
-.terminal-git-chev.open { transform: rotate(180deg); }
+/* Cost / context strip — replaces the project path in the header when xshell-stats is
+   wired up. Layout: "Context:" label → fixed-width progress bar → percent → "Cost:" label
+   → cost in dashboard green. The whole strip is also a Tauri window-drag region (set in
+   the JSX), so the user can grab any empty pixel between values to move the window. */
+.terminal-header-stats { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.terminal-ctx-label { font-size: 10px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+.terminal-ctx-bar { display: inline-block; width: 90px; height: 6px; border-radius: 3px; background: var(--bg-elevated); overflow: hidden; flex-shrink: 0; position: relative; }
+.terminal-ctx-fill { display: block; height: 100%; border-radius: 3px; transition: width 0.18s ease, background 0.18s ease; }
+.terminal-ctx-ok   .terminal-ctx-fill { background: var(--success); }
+.terminal-ctx-warn .terminal-ctx-fill { background: #E5A823; }
+.terminal-ctx-hot  .terminal-ctx-fill { background: var(--accent-terracotta); }
+.terminal-ctx-pct  { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; min-width: 30px; margin-right: 4px; }
+.terminal-ctx-cost { font-family: var(--font-mono); font-size: 10px; color: var(--success); font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* ── Splitter ─────────────────────────────────────────────────────── */
 .terminal-splitter { width: 4px; flex-shrink: 0; background: transparent; cursor: col-resize; position: relative; }
@@ -509,7 +514,17 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .terminal-splitter:hover::before { background: var(--accent-terracotta); }
 
 /* ── Git panel ────────────────────────────────────────────────────── */
-.terminal-git-panel { flex-shrink: 0; display: flex; flex-direction: column; background: var(--bg-surface); overflow: hidden; min-width: 0; }
+.terminal-side-panel { flex-shrink: 0; display: flex; flex-direction: column; background: var(--bg-surface); overflow: hidden; min-width: 0; }
+
+/* Right-side activity bar — VS Code-style icon column for panel toggles. Claude-only;
+   sized for one-handed glance use without crowding the terminal. Future panels (file
+   explorer, search, history) will add icons here. */
+.terminal-activity-bar { width: 32px; flex-shrink: 0; background: var(--bg-surface); border-left: 1px solid var(--border-subtle); display: flex; flex-direction: column; align-items: center; padding: 6px 0; gap: 4px; }
+.terminal-activity-btn { position: relative; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; color: var(--icon-bright); border-radius: var(--radius-sm); cursor: pointer; transition: background 0.12s, color 0.12s; }
+.terminal-activity-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.terminal-activity-btn.active { background: var(--bg-active); color: var(--accent-terracotta); }
+.terminal-activity-btn:disabled { opacity: 0.35; cursor: default; }
+.terminal-activity-badge { position: absolute; top: 1px; right: 1px; min-width: 14px; height: 14px; padding: 0 3px; background: var(--accent-terracotta); color: #fff; font-size: 9px; font-weight: 700; line-height: 1; border-radius: 7px; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--bg-surface); pointer-events: none; }
 .git-panel-header { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); flex-shrink: 0; }
 .git-panel-branch { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-panel-ab { display: inline-flex; align-items: center; gap: 1px; font-size: 10px; color: var(--text-tertiary); }

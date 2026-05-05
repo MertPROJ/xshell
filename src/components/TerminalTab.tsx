@@ -7,7 +7,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { GitBranch, ArrowUp, ArrowDown, RefreshCw, ChevronRight, Plus, Minus, History, GitFork, Pencil, X as XIcon } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
-import type { Tab, GitStatus, GitFile, GitCommit, BranchInfo } from "../types";
+import type { Tab, GitStatus, GitFile, GitCommit, BranchInfo, SessionInfo } from "../types";
 import { getShellById } from "../shells";
 import type { ThemeMode } from "./SettingsView";
 
@@ -112,7 +112,28 @@ interface TerminalTabProps {
   defaultShellId: string;
   fullscreenRendering: boolean;
   theme: ThemeMode;
+  // Encoded project dir name (e.g. `C--Users-foo-app`) so we can fetch session stats from
+  // `~/.claude/projects/<encoded>/<id>.jsonl`. Empty when the project hasn't been seen by
+  // claude yet — in that case the cost/context strip falls back to the project path.
+  projectEncodedName: string;
   onBranchSwitch: (tabId: string, newSessionId: string, newTitle: string) => void;
+}
+
+// Compact USD formatter for the header strip — keeps the value tight on narrow terminals
+// without dropping precision for small totals (≪ $1).
+function formatCost(usd: number): string {
+  if (usd <= 0) return "$0";
+  if (usd < 0.01) return "<$0.01";
+  if (usd < 10) return `$${usd.toFixed(2)}`;
+  if (usd < 1000) return `$${usd.toFixed(1)}`;
+  return `$${Math.round(usd)}`;
+}
+
+// 200k context budget colors: ok < 60% < warn < 85% < hot. Mirrors the dashboard tiers.
+function ctxLevel(pct: number): "ok" | "warn" | "hot" {
+  if (pct >= 85) return "hot";
+  if (pct >= 60) return "warn";
+  return "ok";
 }
 
 function TerminalTooltip({ text, rect }: { text: string; rect: DOMRect }) {
@@ -133,7 +154,7 @@ const MIN_PANEL = 200;
 const MAX_PANEL = 600;
 const DEFAULT_PANEL = 280;
 
-export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, theme, onBranchSwitch }: TerminalTabProps) {
+export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, theme, projectEncodedName, onBranchSwitch }: TerminalTabProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -171,6 +192,10 @@ export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesO
   const knownSessionIdsRef = useRef<Set<string>>(new Set());
   const knownSeededRef = useRef<boolean>(false);
   const [tooltip, setTooltip] = useState<{ text: string; rect: DOMRect } | null>(null);
+  // Cost / context strip — driven by the xshell-stats statusline hook (only present when
+  // the user wired it up). Stays null when no authoritative data exists; the header then
+  // falls back to showing the project path verbatim.
+  const [sessionStats, setSessionStats] = useState<SessionInfo | null>(null);
 
   const showTt = useCallback((text: string, el: HTMLElement) => setTooltip({ text, rect: el.getBoundingClientRect() }), []);
   const hideTt = useCallback(() => setTooltip(null), []);
@@ -533,6 +558,33 @@ export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesO
     return () => clearInterval(interval);
   }, [isActive, tab.projectPath, gitPanelEnabled, isClaudeSession, fetchGitStatus]);
 
+  // Drop stale stats whenever the underlying session changes (raw shell / no sessionId /
+  // session swap via /branch). Polling itself only runs while active — but we keep the
+  // last-seen values in state across activate/deactivate so switching tabs doesn't flash
+  // an empty strip for the 4s until the next poll lands.
+  useEffect(() => {
+    if (!isClaudeSession || !tab.sessionId || !projectEncodedName) setSessionStats(null);
+  }, [isClaudeSession, tab.sessionId, projectEncodedName]);
+
+  // Poll session stats (cost, context tokens) while active. Cost ticks up as claude works,
+  // so 4s feels live without hammering disk; the underlying Rust cache short-circuits when
+  // mtimes haven't changed. Skipped entirely for raw shells and tabs without a sessionId.
+  useEffect(() => {
+    if (!isActive || !isClaudeSession || !tab.sessionId || !projectEncodedName) return;
+    let cancelled = false;
+    const fetchStats = async () => {
+      try {
+        const sessions = await invoke<SessionInfo[]>("get_sessions", { encodedName: projectEncodedName });
+        if (cancelled) return;
+        const match = sessions.find(s => s.id === tab.sessionId);
+        if (match) setSessionStats(match);
+      } catch (_) {}
+    };
+    fetchStats();
+    const interval = setInterval(fetchStats, 4000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [isActive, isClaudeSession, tab.sessionId, projectEncodedName]);
+
   // Poll every 5s, but only while this tab is the active (focused) one. Background tabs
   // don't scan — the user can't /branch in a tab they aren't looking at. On each tick we
   // ask Rust whether any jsonl has appeared in the project that (a) isn't in our known
@@ -592,11 +644,17 @@ export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesO
     gitStatus?.behind ? `↓${gitStatus.behind} behind` : null,
     totalChanges ? `${totalChanges} changes` : null,
   ].filter(Boolean).join(" · ");
-  const indicatorTooltip = `${showGitPanel ? "Hide" : "Show"} git panel — ${gitStatus?.branch || "detached"}${gitCounts ? ` (${gitCounts})` : ""}`;
+  const gitButtonTooltip = `${showGitPanel ? "Hide" : "Show"} git panel — ${gitStatus?.branch || "detached"}${gitCounts ? ` (${gitCounts})` : ""}`;
+
+  // Cost/context strip is only meaningful when xshell-stats has populated authoritative
+  // numbers for this session. Without it, the cost would always be $0 and the bar empty —
+  // misleading. Fall back to the plain path in that case.
+  const showStatsStrip = isClaudeSession && sessionStats?.is_authoritative_stats && sessionStats.context_limit > 0;
+  const ctxPct = showStatsStrip ? Math.min(100, (sessionStats!.context_tokens / sessionStats!.context_limit) * 100) : 0;
 
   return (
     <div className="terminal-wrapper" onMouseLeave={hideTt}>
-      <div className="terminal-header">
+      <div className="terminal-header" data-tauri-drag-region>
         {tab.groupId && (
           <span className="terminal-header-label">
             {tab.projectName && <span className="terminal-header-project">{tab.projectName}</span>}
@@ -604,17 +662,19 @@ export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesO
             {tab.title && <span className="terminal-header-title">{tab.title}</span>}
           </span>
         )}
-        {tab.projectPath && <span className="terminal-header-path">{tab.projectPath}</span>}
-        {gitPanelEnabled && isClaudeSession && gitStatus?.is_repo && (
-          <button className={`terminal-git-indicator ${showGitPanel ? "active" : ""}`} onClick={() => { setShowGitPanel(v => !v); if (!showGitPanel) fetchGitStatus(); hideTt(); }} onMouseEnter={(e) => showTt(indicatorTooltip, e.currentTarget)} onMouseLeave={hideTt}>
-            <GitBranch size={11} />
-            <span className="terminal-git-branch">{gitStatus.branch || "detached"}</span>
-            {gitStatus.ahead > 0 && <span className="terminal-git-ab"><ArrowUp size={9} />{gitStatus.ahead}</span>}
-            {gitStatus.behind > 0 && <span className="terminal-git-ab"><ArrowDown size={9} />{gitStatus.behind}</span>}
-            {totalChanges > 0 && <span className="terminal-git-dot">●{totalChanges}</span>}
-            <ChevronRight size={10} className={`terminal-git-chev ${showGitPanel ? "open" : ""}`} />
-          </button>
-        )}
+        {showStatsStrip ? (
+          <div className="terminal-header-stats" data-tauri-drag-region>
+            <span className="terminal-ctx-label" data-tauri-drag-region>Context:</span>
+            <div className={`terminal-ctx-bar terminal-ctx-${ctxLevel(ctxPct)}`} data-tauri-drag-region>
+              <span className="terminal-ctx-fill" style={{ width: `${ctxPct}%` }} />
+            </div>
+            <span className="terminal-ctx-pct" data-tauri-drag-region>{ctxPct.toFixed(0)}%</span>
+            <span className="terminal-ctx-label" data-tauri-drag-region>Cost:</span>
+            <span className="terminal-ctx-cost" data-tauri-drag-region>{formatCost(sessionStats!.cost_usd)}</span>
+          </div>
+        ) : tab.projectPath ? (
+          <span className="terminal-header-path" data-tauri-drag-region>{tab.projectPath}</span>
+        ) : null}
       </div>
       {branchNotice && (
         <div className="branch-banner">
@@ -652,7 +712,7 @@ export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesO
         {gitPanelEnabled && isClaudeSession && showGitPanel && gitStatus?.is_repo && (
           <>
             <div className="terminal-splitter" onPointerDown={onSplitterDown} onMouseEnter={(e) => showTt("Drag to resize", e.currentTarget)} onMouseLeave={hideTt} />
-            <div className="terminal-git-panel" style={{ width: gitPanelWidth }}>
+            <div className="terminal-side-panel" style={{ width: gitPanelWidth }}>
               <div className="git-panel-header">
                 <GitBranch size={12} />
                 <span className="git-panel-branch">{gitStatus.branch}</span>
@@ -669,6 +729,33 @@ export function TerminalTab({ tab, isActive, gitPanelEnabled, gitPanelFilenamesO
               </div>
             </div>
           </>
+        )}
+        {/* Activity bar — claude-only, persistent. Currently hosts the git toggle; future
+            slots (file explorer, search, etc) will land here too. Disabled-but-visible when
+            the panel feature is off or the cwd isn't a git repo, so the bar's column doesn't
+            jump in/out as the user switches tabs. */}
+        {isClaudeSession && (
+          <div className="terminal-activity-bar">
+            {(() => {
+              const gitDisabled = !gitPanelEnabled || !gitStatus?.is_repo;
+              const tip = gitDisabled
+                ? (!gitPanelEnabled ? "Git panel disabled in settings" : "Not a git repository")
+                : gitButtonTooltip;
+              return (
+                <button
+                  className={`terminal-activity-btn ${showGitPanel ? "active" : ""}`}
+                  disabled={gitDisabled}
+                  onClick={() => { if (gitDisabled) return; setShowGitPanel(v => !v); if (!showGitPanel) fetchGitStatus(); hideTt(); }}
+                  onMouseEnter={(e) => showTt(tip, e.currentTarget)}
+                  onMouseLeave={hideTt}
+                  aria-label="Toggle git panel"
+                >
+                  <GitBranch size={15} />
+                  {!gitDisabled && totalChanges > 0 && <span className="terminal-activity-badge">{totalChanges > 99 ? "99+" : totalChanges}</span>}
+                </button>
+              );
+            })()}
+          </div>
         )}
       </div>
       {tooltip && <TerminalTooltip text={tooltip.text} rect={tooltip.rect} />}
