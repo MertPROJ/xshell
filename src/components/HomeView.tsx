@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, useLayoutEffect } fr
 import { invoke } from "@tauri-apps/api/core";
 import { FolderPlus, Plus, Trash2, GitBranch, Search, ArrowRight, ArrowUp, Pencil, Folder as FolderIcon, ChevronRight, X, FolderOpen, MessageSquare, Sparkles } from "lucide-react";
 import { SkillsPanel } from "./SkillsPanel";
+import { ClaudeChatIcon } from "./ClaudeChatIcon";
 import { timeAgo, processSessions } from "../utils";
 import { useProjectImage } from "../hooks/useProjectImage";
 import logo from "../assets/logo.png";
@@ -218,7 +219,7 @@ function SessionRow({ session, isOpen, groupName, onClick, isDragging, onPointer
       <div className={`session-item-icon ${isOpen ? "session-open" : ""}`}>
         {isOpen && <div className="session-open-dot" />}
       </div>
-      <span className="session-item-prompt">$</span>
+      <ClaudeChatIcon size={14} className="session-item-prompt" />
       <div className="session-item-content">
         <div className="session-item-title">{session.title}</div>
         <div className="session-item-meta">
@@ -618,7 +619,7 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
         {dragState?.active && (
           <div className="session-drag-preview" style={{ position: "fixed", top: dragState.pos.y - dragState.offset.y, left: dragState.pos.x - dragState.offset.x }}>
             <div className="session-item session-drag-ghost">
-              <span className="session-item-prompt">$</span>
+              <ClaudeChatIcon size={14} className="session-item-prompt" />
               <div className="session-item-content"><div className="session-item-title">{dragState.title}</div></div>
             </div>
           </div>

@@ -340,6 +340,64 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .wc-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .wc-close:hover { background: #c42b1c; color: white; }
 
+/* Search-active-tabs button — sits between the drag region and the window controls. */
+.tb-search-btn { display: flex; align-items: center; gap: 7px; padding: 0 10px; border: none; background: transparent; color: var(--text-tertiary); cursor: pointer; transition: all 0.1s; flex-shrink: 0; }
+.tb-search-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tb-search-btn.active { background: var(--bg-active); color: var(--text-primary); }
+.tb-search-kbd { font-family: var(--font-mono); font-size: 9px; font-weight: 500; line-height: 1; letter-spacing: 0.3px; color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 3px 6px; user-select: none; }
+.tb-search-btn:hover .tb-search-kbd, .tb-search-btn.active .tb-search-kbd { color: var(--text-secondary); border-color: var(--border-default); }
+
+/* ── Tab Search Dialog ────────────────────────────────────────────── */
+.ts-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: flex-start; justify-content: center; padding-top: 18vh; z-index: 3000; animation: fadeIn 0.12s ease; }
+.ts-dialog { width: 460px; max-height: 60vh; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; overflow: hidden; }
+
+.ts-search-row { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); }
+.ts-search-icon { color: var(--text-muted); flex-shrink: 0; }
+.ts-search-input { flex: 1; background: transparent; border: none; outline: none; font-size: 13px; color: var(--text-primary); font-family: var(--font-sans); }
+.ts-search-input::placeholder { color: var(--text-muted); }
+.ts-count { font-size: 9px; color: var(--text-muted); background: var(--bg-elevated); padding: 1px 6px; border-radius: 8px; flex-shrink: 0; }
+
+.ts-list { flex: 1; overflow-y: auto; padding: 4px; min-height: 0; }
+.ts-empty { padding: 24px 12px; text-align: center; font-size: 11px; color: var(--text-muted); }
+
+.ts-section-divider { font-size: 9px; font-weight: 500; color: var(--text-muted); letter-spacing: 0.4px; text-transform: uppercase; padding: 8px 10px 4px; border-top: 1px solid var(--border-subtle); margin-top: 4px; }
+
+.ts-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+.ts-row.highlighted { background: var(--bg-hover); }
+.ts-row.active { background: var(--bg-active); }
+
+.ts-project-icon { width: 26px; height: 26px; border-radius: 7px; display: flex; align-items: center; justify-content: center; background: var(--bg-card); color: var(--text-tertiary); font-size: 10px; font-weight: 600; flex-shrink: 0; overflow: hidden; letter-spacing: -0.2px; }
+.ts-project-img { width: 100%; height: 100%; object-fit: cover; }
+.ts-shell-slot { background: var(--bg-elevated); }
+
+.ts-row-text { flex: 1; min-width: 0; line-height: 1.2; }
+.ts-row-title { font-size: 12px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ts-row-sub { font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+
+.ts-row-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-terracotta); flex-shrink: 0; }
+.ts-row-dot-active { background: var(--success); }
+.ts-row-tag-icon { color: var(--text-muted); flex-shrink: 0; }
+
+/* Segmented view pills (Tabs / Actions) */
+.ts-views { display: flex; align-items: center; gap: 4px; padding: 8px 10px 4px; }
+.ts-view-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 11px; font-weight: 500; color: var(--text-muted); background: transparent; border: 1px solid transparent; border-radius: 999px; cursor: pointer; transition: all 0.12s ease; }
+.ts-view-pill:hover { color: var(--text-secondary); background: var(--bg-hover); }
+.ts-view-pill.active { color: var(--text-primary); background: var(--bg-elevated); border-color: var(--border-subtle); }
+.ts-view-count { font-size: 9px; color: var(--text-muted); background: var(--bg-card); padding: 1px 6px; border-radius: 8px; }
+.ts-view-pill.active .ts-view-count { color: var(--text-secondary); }
+.ts-views-spacer { flex: 1; }
+.ts-arrow-hint { display: inline-flex; align-items: center; gap: 1px; color: var(--text-muted); opacity: 0.55; font-size: 10px; }
+
+/* Action rows — variant of ts-row with an icon tile in place of the project icon. */
+.ts-action-row.disabled { opacity: 0.4; cursor: not-allowed; }
+.ts-action-icon { width: 26px; height: 26px; border-radius: 7px; background: var(--bg-elevated); color: var(--text-secondary); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+/* Breadcrumb hint for drill-down views */
+.ts-breadcrumb { display: inline-flex; align-items: center; gap: 4px; font-size: 9px; color: var(--text-muted); padding: 0 6px; flex-shrink: 0; }
+
+/* Slim hint footer — single descriptive line, low-key. */
+.ts-hint-text { padding: 6px 12px; border-top: 1px solid var(--border-subtle); background: var(--bg-deep); font-size: 9px; color: var(--text-muted); text-align: left; letter-spacing: 0.3px; }
+
 /* ── Home View ────────────────────────────────────────────────────── */
 
 .home-view { flex: 1; overflow-y: auto; padding: 32px 40px; }
