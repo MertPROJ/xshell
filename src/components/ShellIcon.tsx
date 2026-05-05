@@ -21,6 +21,15 @@ export function PowerShellIcon(p: Props) {
   );
 }
 
+export function Pwsh7Icon(p: Props) {
+  return (
+    <Wrap {...p} bg="#2671BE">
+      <path d="M5 7L10 12L5 17" stroke="#E8F1FB" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <text x="11" y="19" fontSize="9" fill="#E8F1FB" fontWeight="700" fontFamily="monospace">7</text>
+    </Wrap>
+  );
+}
+
 export function CmdIcon(p: Props) {
   return (
     <Wrap {...p} bg="#1E1E1E">
@@ -65,6 +74,7 @@ export function FishIcon(p: Props) {
 export function ShellIcon({ id, size, className }: { id?: string; size?: number; className?: string }) {
   switch (id) {
     case "powershell": return <PowerShellIcon size={size} className={className} />;
+    case "pwsh":       return <Pwsh7Icon size={size} className={className} />;
     case "cmd":        return <CmdIcon size={size} className={className} />;
     case "gitbash":    return <GitBashIcon size={size} className={className} />;
     case "bash":       return <BashIcon size={size} className={className} />;

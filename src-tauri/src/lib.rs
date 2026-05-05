@@ -1396,7 +1396,7 @@ fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, sessio
         // Claude mode with an explicit host shell: launch the shell and run `claude` inside it
         // so the user's preferred shell wraps the session (and stays alive after claude exits).
         match shell_kind {
-            "powershell" => {
+            "powershell" | "pwsh" => {
                 let mut c = CommandBuilder::new(shell);
                 c.arg("-NoLogo");
                 c.arg("-NoExit");
