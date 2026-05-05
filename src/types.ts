@@ -202,6 +202,7 @@ export interface Tab {
   shellMode?: 'claude' | 'raw'; // default 'claude'. 'raw' = plain shell, no claude command
   shellId?: string; // e.g. 'powershell', 'cmd', 'bash', 'zsh' — when shellMode='raw'
   groupId?: string; // when set, the tab is a member of a group (not standalone in the tab bar)
+  lastActiveAt?: number; // ms epoch — bumped whenever the tab becomes the focused leaf; drives "recent" sort in the tab search dialog
 }
 
 // Binary layout tree for a group's split view. Leaves point at tab ids.

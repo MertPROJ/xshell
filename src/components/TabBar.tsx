@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useLayoutEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { X, Minus, Square, X as XIcon, Plus, ChevronDown, ChevronLeft, ChevronRight, Terminal as TerminalIcon, MessageSquarePlus } from "lucide-react";
+import { X, Minus, Square, X as XIcon, Plus, ChevronDown, ChevronLeft, ChevronRight, Terminal as TerminalIcon, Command } from "lucide-react";
 import { ShellIcon } from "./ShellIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { timeAgo, processSessions } from "../utils";
@@ -9,6 +9,8 @@ import { getAvailableShells } from "../shells";
 import { collectLeafIds } from "../layout";
 import { Layers } from "lucide-react";
 import { useDragReorder } from "../hooks/useDragReorder";
+import { QuickActionsDialog } from "./QuickActionsDialog";
+import { ClaudeChatIcon } from "./ClaudeChatIcon";
 
 // Tab bar shows tabs and groups interleaved. A group is one "entry" representing
 // its bundled tabs; the individual tabs inside it don't appear standalone.
@@ -25,17 +27,22 @@ interface TabBarProps {
   activeTabProject: ProjectInfo | null;
   openSessionIds: Set<string>;
   projectIcons: Record<string, ProjectSettings>;
+  pinnedProjects: ProjectInfo[];
   sidebarCollapsed: boolean;
   defaultShell: string;
   onExpandSidebar: () => void;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onReorderTabs: (tabs: Tab[]) => void;
+  onNewChat: (project: ProjectInfo) => void;
   onNewChatInActive: () => void;
   onNewShellInContext: () => void;
   onOpenSession: (session: SessionInfo, project: ProjectInfo) => void;
   onNewShell: (project: ProjectInfo | null, shellId: string, shellName: string) => void;
   onRenameGroup: (groupId: string, name: string) => void;
+  onGoHome: () => void;
+  onOpenSettings: () => void;
+  onToggleSidebar: () => void;
 }
 
 function RecentSessionsDropdown({ project, displayName, openSessionIds, anchorRect, anchorEl, onPick, onPickShell, onNewChat, onClose }: { project: ProjectInfo | null; displayName: string; openSessionIds: Set<string>; anchorRect: DOMRect; anchorEl: HTMLElement; onPick: (s: SessionInfo) => void; onPickShell: (shellId: string, shellName: string) => void; onNewChat: () => void; onClose: () => void }) {
@@ -86,7 +93,7 @@ function RecentSessionsDropdown({ project, displayName, openSessionIds, anchorRe
       {project && (
         <>
           <div className="tab-dropdown-item" onClick={() => { onNewChat(); onClose(); }}>
-            <MessageSquarePlus size={12} className="tab-dropdown-shell-icon" />
+            <ClaudeChatIcon size={14} className="tab-dropdown-shell-icon" />
             <div className="tab-dropdown-item-content">
               <div className="tab-dropdown-item-title">New chat in {displayName}</div>
             </div>
@@ -121,7 +128,7 @@ function RecentSessionsDropdown({ project, displayName, openSessionIds, anchorRe
           {sessions !== null && sorted.length === 0 && <div className="tab-dropdown-empty">{sessions.length === 0 ? "No sessions yet" : "All sessions are already open"}</div>}
           {sorted.map(s => (
             <div key={s.id} className="tab-dropdown-item" onClick={() => { onPick(s); onClose(); }}>
-              <span className="tab-dropdown-prompt">$</span>
+              <ClaudeChatIcon size={13} className="tab-dropdown-prompt" />
               <div className="tab-dropdown-item-content">
                 <div className="tab-dropdown-item-title">{s.title}</div>
                 <div className="tab-dropdown-item-time">{timeAgo(s.timestamp)}</div>
@@ -148,11 +155,29 @@ function TabTooltip({ text, rect }: { text: string; rect: DOMRect }) {
   return <div className="tab-tooltip" ref={ref} style={style}>{text}</div>;
 }
 
-export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProject, hoveredProjectPath, linkedProjectPath, activeTabProject, openSessionIds, projectIcons, sidebarCollapsed, defaultShell, onExpandSidebar, onSelectTab, onCloseTab, onReorderTabs, onNewChatInActive, onNewShellInContext, onOpenSession, onNewShell, onRenameGroup }: TabBarProps) {
+export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProject, hoveredProjectPath, linkedProjectPath, activeTabProject, openSessionIds, projectIcons, pinnedProjects, sidebarCollapsed, defaultShell, onExpandSidebar, onSelectTab, onCloseTab, onReorderTabs, onNewChat, onNewChatInActive, onNewShellInContext, onOpenSession, onNewShell, onRenameGroup, onGoHome, onOpenSettings, onToggleSidebar }: TabBarProps) {
   const appWindow = getCurrentWindow();
   const highlightPath = hoveredProjectPath || linkedProjectPath || selectedProject?.path || null;
   const [dropdown, setDropdown] = useState<{ rect: DOMRect; el: HTMLElement } | null>(null);
   const [tooltip, setTooltip] = useState<{ text: string; rect: DOMRect } | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
+  const shortcutLabel = isMac ? "⌘ K" : "Ctrl K";
+
+  // Global Cmd/Ctrl+K toggles the tab search dialog. Capture-phase + preventDefault so
+  // the active terminal (xterm) doesn't also see the keystroke as kill-to-end-of-line.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (!mod || e.shiftKey || e.altKey) return;
+      if (e.key.toLowerCase() !== "k") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setSearchOpen(v => !v);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [isMac]);
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const commitRename = () => {
@@ -329,6 +354,13 @@ export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProj
 
       <div className="tab-bar-drag" data-tauri-drag-region />
 
+      {tabs.length > 0 && (
+        <button className={`tb-search-btn ${searchOpen ? "active" : ""}`} onClick={() => setSearchOpen(v => !v)} onMouseEnter={(e) => showTooltip(`Quick Actions (${shortcutLabel})`, e.currentTarget)} onMouseLeave={hideTooltip} aria-label="Quick Actions">
+          <Command size={13} />
+          <span className="tb-search-kbd">{shortcutLabel}</span>
+        </button>
+      )}
+
       <div className="window-controls">
         <button className="wc-btn" onClick={() => appWindow.minimize()}><Minus size={13} /></button>
         <button className="wc-btn" onClick={() => appWindow.toggleMaximize()}><Square size={10} /></button>
@@ -340,6 +372,28 @@ export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProj
       )}
 
       {tooltip && <TabTooltip text={tooltip.text} rect={tooltip.rect} />}
+
+      {searchOpen && (
+        <QuickActionsDialog
+          tabs={tabs}
+          activeTabId={activeTabId}
+          projectIcons={projectIcons}
+          pinnedProjects={pinnedProjects}
+          contextProject={activeTabProject}
+          hoveredProjectPath={hoveredProjectPath}
+          linkedProjectPath={linkedProjectPath}
+          selectedProjectPath={selectedProject?.path || null}
+          hasActiveTab={!!tabs.find(t => t.id === activeTabId)}
+          onSelectTab={onSelectTab}
+          onCloseTab={onCloseTab}
+          onNewChat={onNewChat}
+          onNewShell={onNewShell}
+          onGoHome={onGoHome}
+          onOpenSettings={onOpenSettings}
+          onToggleSidebar={onToggleSidebar}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -527,7 +527,7 @@ export default function App() {
     // its sessionId after /branch would leave its original session id "free", and a later
     // re-open of that session would generate a colliding tab id.
     const tabId = `terminal-${session.id}-${Date.now().toString(36)}`;
-    setTabs(prev => [...prev, { id: tabId, type: "terminal", title: session.title, sessionId: session.id, projectPath: session.project_path || project?.path || "", projectName: session.project_name || project?.name || "" }]);
+    setTabs(prev => [...prev, { id: tabId, type: "terminal", title: session.title, sessionId: session.id, projectPath: session.project_path || project?.path || "", projectName: session.project_name || project?.name || "", lastActiveAt: Date.now() }]);
     setActiveTabId(tabId);
   }, [tabs]);
 
@@ -536,7 +536,7 @@ export default function App() {
     const existingTab = tabs.find(t => t.sessionId === session.id);
     if (existingTab) return;
     const tabId = `terminal-${session.id}-${Date.now().toString(36)}`;
-    setTabs(prev => [...prev, { id: tabId, type: "terminal", title: session.title, sessionId: session.id, projectPath: session.project_path || project?.path || "", projectName: session.project_name || project?.name || "" }]);
+    setTabs(prev => [...prev, { id: tabId, type: "terminal", title: session.title, sessionId: session.id, projectPath: session.project_path || project?.path || "", projectName: session.project_name || project?.name || "", lastActiveAt: Date.now() }]);
   }, [tabs]);
 
   const handleNewChat = useCallback((project: ProjectInfo) => {
@@ -544,7 +544,7 @@ export default function App() {
     // Generate a unique name we can match against when the session is created.
     // Claude CLI accepts this via `-n <name>` and writes it as customTitle in the JSONL.
     const customName = `Chat-${Math.random().toString(36).slice(2, 8)}`;
-    setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: customName, customName, projectPath: project.path, projectName: project.name, shellMode: "claude" }]);
+    setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: customName, customName, projectPath: project.path, projectName: project.name, shellMode: "claude", lastActiveAt: Date.now() }]);
     setActiveTabId(tabId);
   }, []);
 
@@ -552,7 +552,7 @@ export default function App() {
   // project === null → shell spawned in the user's home directory.
   const handleNewShell = useCallback((project: ProjectInfo | null, shellId: string, shellName: string) => {
     const tabId = `terminal-shell-${Date.now()}`;
-    setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: shellName, projectPath: project?.path || "", projectName: project?.name || "~", shellMode: "raw", shellId }]);
+    setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: shellName, projectPath: project?.path || "", projectName: project?.name || "~", shellMode: "raw", shellId, lastActiveAt: Date.now() }]);
     setActiveTabId(tabId);
   }, []);
 
@@ -670,6 +670,20 @@ export default function App() {
     document.addEventListener("pointerdown", onDown, true);
     return () => document.removeEventListener("pointerdown", onDown, true);
   }, []);
+
+  // Bump lastActiveAt on the currently focused tab whenever activeTabId or the focused
+  // leaf inside a group changes. Powers the "recent" sort in the tab search dialog.
+  useEffect(() => {
+    const group = groupsRef.current.find(g => g.id === activeTabId);
+    const id = group ? (activeLeafByGroup[activeTabId] || collectLeafIds(group.layout)[0]) : activeTabId;
+    if (!id) return;
+    const now = Date.now();
+    setTabs(prev => {
+      const found = prev.find(t => t.id === id);
+      if (!found) return prev;
+      return prev.map(t => t.id === id ? { ...t, lastActiveAt: now } : t);
+    });
+  }, [activeTabId, activeLeafByGroup]);
 
   // After each render: park every terminal host in its current slot (or the parking div).
   // Drop obsolete hosts for tabs that no longer exist.
@@ -923,11 +937,24 @@ export default function App() {
     handleNewShell(contextProject, defaultShell, shell?.name || "Shell");
   }, [contextProject, defaultShell, handleNewShell]);
 
+  // Group-aware tab selection: a tab inside a group requires activating its group AND
+  // marking that pane as the focused leaf. Standalone tabs and groups themselves fall
+  // through to a plain setActiveTabId. Used by both the tab bar and the search dialog.
+  const handleSelectTab = useCallback((id: string) => {
+    const tab = tabsRef.current.find(t => t.id === id);
+    if (tab?.groupId) {
+      setActiveTabId(tab.groupId);
+      setActiveLeafByGroup(prev => ({ ...prev, [tab.groupId!]: id }));
+    } else {
+      setActiveTabId(id);
+    }
+  }, []);
+
   return (
     <div className={`app-layout ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <Sidebar projects={userProjects} projectIcons={projectIcons} selectedProject={selectedProject} activeCountByProject={activeCountByProject} sidebarLayout={sidebarLayout} onLayoutChange={persistSidebarLayout} onSelectProject={handleSelectProject} onGoHome={handleGoHome} onRemoveProject={handleRemoveProject} onEditProject={(p) => setEditingProjectPath(p)} onHoverProject={setHoveredProjectPath} onOpenSettings={() => setActiveTabId("settings")} onAddProject={() => setShowProjectPicker(true)} onCollapse={() => setSidebarCollapsed(true)} activeTabId={activeTabId} linkedProjectPath={activeTabProjectPath} showRateLimit={showRateLimitInSidebar} updateAvailable={updateInfo.updateAvailable} />
       <div className="main-content">
-        <TabBar tabs={tabs} entries={entries} onRenameGroup={(id, name) => setGroups(prev => prev.map(g => g.id === id ? { ...g, name } : g))} closingTabIds={closingTabIds} activeTabId={activeTabId} selectedProject={selectedProject} hoveredProjectPath={hoveredProjectPath} linkedProjectPath={activeTabProjectPath} activeTabProject={contextProject} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} projectIcons={projectIcons} sidebarCollapsed={sidebarCollapsed} defaultShell={defaultShell} onExpandSidebar={() => setSidebarCollapsed(false)} onSelectTab={setActiveTabId} onCloseTab={handleCloseTab} onReorderTabs={handleReorderTabs} onNewChatInActive={handleNewChatInActive} onNewShellInContext={handleNewShellInContext} onOpenSession={handleOpenSession} onNewShell={handleNewShell} />
+        <TabBar tabs={tabs} entries={entries} onRenameGroup={(id, name) => setGroups(prev => prev.map(g => g.id === id ? { ...g, name } : g))} closingTabIds={closingTabIds} activeTabId={activeTabId} selectedProject={selectedProject} hoveredProjectPath={hoveredProjectPath} linkedProjectPath={activeTabProjectPath} activeTabProject={contextProject} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} projectIcons={projectIcons} pinnedProjects={userProjects} sidebarCollapsed={sidebarCollapsed} defaultShell={defaultShell} onExpandSidebar={() => setSidebarCollapsed(false)} onSelectTab={handleSelectTab} onCloseTab={handleCloseTab} onReorderTabs={handleReorderTabs} onNewChat={handleNewChat} onNewChatInActive={handleNewChatInActive} onNewShellInContext={handleNewShellInContext} onOpenSession={handleOpenSession} onNewShell={handleNewShell} onGoHome={handleGoHome} onOpenSettings={() => setActiveTabId("settings")} onToggleSidebar={() => setSidebarCollapsed(c => !c)} />
         {/* Settings view — hidden unless activeTabId === 'settings' */}
         <div style={{ display: showSettings ? "flex" : "none", flex: 1, overflow: "hidden" }}>
           <SettingsView theme={theme} onSetTheme={persistTheme} gitLazyPolling={gitLazyPolling} onSetGitLazyPolling={persistGitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} showTerminalHeaderStats={showTerminalHeaderStats} onSetShowTerminalHeaderStats={persistShowTerminalHeaderStats} showProjectStatsChart={showProjectStatsChart} onSetShowProjectStatsChart={persistShowProjectStatsChart} updateInfo={updateInfo} />
