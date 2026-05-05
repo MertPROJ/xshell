@@ -85,7 +85,11 @@ export default function App() {
   const [projectSessions, setProjectSessions] = useState<SessionInfo[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
   const [sessionsLoading, setSessionsLoading] = useState(false);
-  const [gitPanelEnabled, setGitPanelEnabled] = useState(true);
+  // Lazy polling = only fetch git status while the panel is open (a single fetch fires at
+  // session start so the activity-bar icon has something to show). Eager polling re-fetches
+  // every 3s while the tab is active. Default lazy: most users only need fresh git data
+  // when they're actually looking at it.
+  const [gitLazyPolling, setGitLazyPolling] = useState(true);
   const [gitPanelFilenamesOnly, setGitPanelFilenamesOnly] = useState(false);
   const [contextTreeEnabled, setContextTreeEnabled] = useState(true);
   // Both default to true: setting up the statusline hook is the meaningful gesture, the
@@ -125,12 +129,12 @@ export default function App() {
     (async () => {
       try {
         const store = await load("settings.json", { defaults: {}, autoSave: true });
-        const [paths, icons, savedTabs, savedGroups, gitEnabled, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender] = await Promise.all([
+        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender] = await Promise.all([
           store.get<string[]>("project_paths"),
           store.get<Record<string, ProjectSettings>>("project_icons"),
           store.get<Tab[]>("open_tabs"),
           store.get<Group[]>("open_groups"),
-          store.get<boolean>("git_panel_enabled"),
+          store.get<boolean>("git_lazy_polling"),
           store.get<string>("terminal_bg_color"),
           store.get<boolean>("always_on_top"),
           store.get<string>("default_shell"),
@@ -157,7 +161,7 @@ export default function App() {
         if (derivedPaths.length) setSavedPaths(derivedPaths);
         else if (paths) setSavedPaths(paths);
         if (icons) setProjectIcons(icons);
-        if (typeof gitEnabled === "boolean") setGitPanelEnabled(gitEnabled);
+        if (typeof gitLazy === "boolean") setGitLazyPolling(gitLazy);
         if (typeof bgColor === "string") setTerminalBgColor(bgColor);
         if (typeof aot === "boolean") setAlwaysOnTop(aot);
         if (typeof shell === "string") setDefaultShell(shell);
@@ -331,9 +335,9 @@ export default function App() {
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("project_icons", icons); } catch (_) {}
   }, []);
 
-  const persistGitPanelEnabled = useCallback(async (enabled: boolean) => {
-    setGitPanelEnabled(enabled);
-    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("git_panel_enabled", enabled); } catch (_) {}
+  const persistGitLazyPolling = useCallback(async (enabled: boolean) => {
+    setGitLazyPolling(enabled);
+    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("git_lazy_polling", enabled); } catch (_) {}
   }, []);
 
   const persistGitPanelFilenamesOnly = useCallback(async (enabled: boolean) => {
@@ -905,7 +909,7 @@ export default function App() {
         <TabBar tabs={tabs} entries={entries} onRenameGroup={(id, name) => setGroups(prev => prev.map(g => g.id === id ? { ...g, name } : g))} closingTabIds={closingTabIds} activeTabId={activeTabId} selectedProject={selectedProject} hoveredProjectPath={hoveredProjectPath} linkedProjectPath={activeTabProjectPath} activeTabProject={contextProject} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} projectIcons={projectIcons} sidebarCollapsed={sidebarCollapsed} defaultShell={defaultShell} onExpandSidebar={() => setSidebarCollapsed(false)} onSelectTab={setActiveTabId} onCloseTab={handleCloseTab} onReorderTabs={handleReorderTabs} onNewChatInActive={handleNewChatInActive} onNewShellInContext={handleNewShellInContext} onOpenSession={handleOpenSession} onNewShell={handleNewShell} />
         {/* Settings view — hidden unless activeTabId === 'settings' */}
         <div style={{ display: showSettings ? "flex" : "none", flex: 1, overflow: "hidden" }}>
-          <SettingsView theme={theme} onSetTheme={persistTheme} gitPanelEnabled={gitPanelEnabled} onSetGitPanelEnabled={persistGitPanelEnabled} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} updateInfo={updateInfo} />
+          <SettingsView theme={theme} onSetTheme={persistTheme} gitLazyPolling={gitLazyPolling} onSetGitLazyPolling={persistGitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} updateInfo={updateInfo} />
         </div>
         {/* Home view — hidden when a terminal tab is active */}
         <div style={{ display: showHome ? "flex" : "none", flex: 1, overflow: "hidden" }}>
@@ -984,7 +988,7 @@ export default function App() {
             ? (allProjects.find(p => p.path.toLowerCase() === tab.projectPath!.toLowerCase())?.encoded_name || "")
             : "";
           return createPortal(
-            <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitPanelEnabled={gitPanelEnabled} gitPanelFilenamesOnly={gitPanelFilenamesOnly} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} fullscreenRendering={fullscreenRendering} theme={theme} projectEncodedName={encodedName} onBranchSwitch={handleSwitchTabToBranch} />,
+            <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitLazyPolling={gitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} fullscreenRendering={fullscreenRendering} theme={theme} projectEncodedName={encodedName} onBranchSwitch={handleSwitchTabToBranch} />,
             host,
           );
         })}

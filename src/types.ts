@@ -69,6 +69,16 @@ export interface GitCommit {
   relative_time: string;
 }
 
+export interface GitBranch {
+  name: string;                 // short name (e.g. "main" or "feature/foo")
+  full_ref: string;             // "refs/heads/main" | "refs/remotes/origin/foo"
+  is_current: boolean;
+  is_remote: boolean;
+  upstream: string;             // empty when none
+  last_commit_subject: string;
+  last_commit_relative: string; // "2 days ago", "3 hours ago", ...
+}
+
 export interface BranchInfo {
   new_session_id: string;
   title: string;
@@ -206,7 +216,7 @@ export interface Group {
 }
 
 export interface AppSettings {
-  gitPanelEnabled: boolean;
+  gitLazyPolling: boolean;  // true = poll only while panel is open + once at session start
   terminalBgColor: string;  // hex, default '#141413'
   alwaysOnTop: boolean;
   defaultShell: string;     // shell id (must match a preset in SHELL_PRESETS)

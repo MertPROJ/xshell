@@ -1415,6 +1415,65 @@ fn git_unstage(cwd: String, paths: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+// ── Branch list / checkout ────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GitBranch {
+    pub name: String,            // short name: "main", "feature/foo"
+    pub full_ref: String,        // "refs/heads/main" or "refs/remotes/origin/foo"
+    pub is_current: bool,
+    pub is_remote: bool,
+    pub upstream: String,        // empty when none
+    pub last_commit_subject: String,
+    pub last_commit_relative: String,
+}
+
+#[tauri::command]
+fn list_git_branches(cwd: String) -> Vec<GitBranch> {
+    // ASCII unit-separator (\x1f) between fields keeps subjects with spaces / tabs intact.
+    // Sorted by committer date desc so the dropdown opens with the most-relevant branches up
+    // top — current branch + recent feature branches before stale ones.
+    let format = "%(refname)\x1f%(refname:short)\x1f%(HEAD)\x1f%(upstream:short)\x1f%(committerdate:relative)\x1f%(subject)";
+    let mut cmd = git_cmd(&cwd);
+    cmd.arg("for-each-ref").arg("--sort=-committerdate").arg(format!("--format={}", format)).arg("refs/heads/").arg("refs/remotes/");
+    let out = match cmd.output() { Ok(o) if o.status.success() => o, _ => return vec![] };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut branches = Vec::new();
+    for line in text.lines() {
+        let mut parts = line.splitn(6, '\x1f');
+        let full_ref = parts.next().unwrap_or("").to_string();
+        let name = parts.next().unwrap_or("").to_string();
+        let head_marker = parts.next().unwrap_or("");
+        let upstream = parts.next().unwrap_or("").to_string();
+        let last_commit_relative = parts.next().unwrap_or("").to_string();
+        let last_commit_subject = parts.next().unwrap_or("").to_string();
+        if name.is_empty() { continue; }
+        // Skip `origin/HEAD` symbolic ref — it's a pointer, not a real branch the user can switch to.
+        if full_ref.ends_with("/HEAD") { continue; }
+        let is_remote = full_ref.starts_with("refs/remotes/");
+        let is_current = head_marker == "*";
+        branches.push(GitBranch { name, full_ref, is_current, is_remote, upstream, last_commit_subject, last_commit_relative });
+    }
+    branches
+}
+
+#[tauri::command]
+fn git_checkout(cwd: String, branch: String) -> Result<(), String> {
+    // For remote refs we hand `git switch` the bare branch name (e.g. "feature/foo" not
+    // "origin/feature/foo"). Since git 2.23, `switch <name>` does DWIM: if no local branch
+    // exists but exactly one remote tracks it, git creates the local branch + sets upstream.
+    let target = branch.strip_prefix("origin/").unwrap_or(&branch).to_string();
+    let mut cmd = git_cmd(&cwd);
+    cmd.arg("switch").arg(&target);
+    let out = cmd.output().map_err(|e| format!("git switch failed: {}", e))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        // Empty stderr can happen on truly-fatal git errors; give the user *something* useful.
+        return Err(if stderr.is_empty() { format!("git switch exited with status {}", out.status) } else { stderr });
+    }
+    Ok(())
+}
+
 // ── Terminal / PTY Commands ────────────────────────────────────────────
 
 #[tauri::command]
@@ -1699,7 +1758,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(AppState { terminals: Mutex::new(HashMap::new()) })
-        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, open_url, detect_update_method, run_npm_update, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, spawn_terminal, write_terminal, resize_terminal, close_terminal])
+        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, open_url, detect_update_method, run_npm_update, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, spawn_terminal, write_terminal, resize_terminal, close_terminal])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

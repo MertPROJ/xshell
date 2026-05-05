@@ -14,8 +14,8 @@ export type ThemeMode = "dark" | "light";
 interface SettingsViewProps {
   theme: ThemeMode;
   onSetTheme: (theme: ThemeMode) => void;
-  gitPanelEnabled: boolean;
-  onSetGitPanelEnabled: (enabled: boolean) => void;
+  gitLazyPolling: boolean;
+  onSetGitLazyPolling: (enabled: boolean) => void;
   gitPanelFilenamesOnly: boolean;
   onSetGitPanelFilenamesOnly: (enabled: boolean) => void;
   contextTreeEnabled: boolean;
@@ -82,7 +82,7 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanelEnabled, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, updateInfo }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
@@ -192,11 +192,11 @@ export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanel
                 </SettingRow>
               </Section>
 
-              <Section title="Git panel" description="Inline git status shown alongside Claude terminal tabs.">
-                <SettingRow title="Show git panel" description="Show the branch indicator and side panel inside Claude terminal tabs. Turning this off also stops the background git status polling.">
-                  <Toggle checked={gitPanelEnabled} onChange={onSetGitPanelEnabled} />
+              <Section title="Terminal sidebar" description="Right-side activity bar inside Claude terminal tabs. Hosts the git panel today; more panels (file explorer, search, …) will land here.">
+                <SettingRow title="Only poll git when panel is open" description="When on (default), git status is fetched once when the Claude session starts, then again only while the git panel is open. Turn off to keep polling every few seconds even when the panel is closed.">
+                  <Toggle checked={gitLazyPolling} onChange={onSetGitLazyPolling} />
                 </SettingRow>
-                <SettingRow title="Filenames only" description="Show just the file name (basename) instead of the full relative path. Hover a row to see the full path.">
+                <SettingRow title="Filenames only" description="In the git panel, show just the file name (basename) instead of the full relative path. Hover a row to see the full path.">
                   <Toggle checked={gitPanelFilenamesOnly} onChange={onSetGitPanelFilenamesOnly} />
                 </SettingRow>
               </Section>
