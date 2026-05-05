@@ -700,6 +700,16 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 
 /* Inline action button used on Settings rows that open a sub-dialog (e.g. wizard). */
 .settings-action-btn { padding: 4px 10px; font-size: 11px; gap: 5px; }
+
+/* Hero card at the top of the Connect tab — short pitch + a primary "Connect" CTA when the
+   user hasn't set the statusline up yet. Once connected the CTA hides and the message flips
+   to confirmation copy. Sits above the regular Section rows. */
+.settings-connect-hero { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; margin-bottom: 16px; background: color-mix(in oklab, var(--accent-terracotta) 10%, var(--bg-card)); border: 1px solid color-mix(in oklab, var(--accent-terracotta) 30%, var(--border-default)); border-radius: var(--radius-md); }
+.settings-connect-hero-icon { width: 32px; height: 32px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: color-mix(in oklab, var(--accent-terracotta) 22%, var(--bg-elevated)); color: var(--accent-terracotta); border-radius: 8px; }
+.settings-connect-hero-text { flex: 1; min-width: 0; }
+.settings-connect-hero-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; }
+.settings-connect-hero-sub { font-size: 11px; color: var(--text-secondary); line-height: 1.5; }
+.settings-connect-cta { flex-shrink: 0; padding: 6px 12px; font-size: 11px; gap: 5px; align-self: center; }
 /* About → Version row: monospaced version number + status chip + refresh button. */
 .settings-version-row { display: flex; align-items: center; gap: 10px; }
 .settings-version-current { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); }
@@ -722,6 +732,8 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
    +1 on the Settings cog refers to. */
 .settings-nav-dot { margin-left: auto; width: 8px; height: 8px; background: #e5484d; border-radius: 50%; box-shadow: 0 0 0 2px var(--bg-deep); flex-shrink: 0; }
 .settings-nav-item.active .settings-nav-dot { box-shadow: 0 0 0 2px var(--bg-active); }
+/* Same shape, terracotta tint — distinguishes "recommended setup" from the red "update available" cue. */
+.settings-nav-dot-recommended { background: var(--accent-terracotta); }
 .settings-row-control { flex-shrink: 0; display: flex; align-items: center; }
 .settings-color-row { display: flex; align-items: center; gap: 10px; }
 .settings-color-input { -webkit-appearance: none; appearance: none; width: 36px; height: 24px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: transparent; cursor: pointer; padding: 0; }

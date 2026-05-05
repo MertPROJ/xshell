@@ -96,6 +96,13 @@ export default function App() {
   // toggles let the user hide either feature even with stats available.
   const [showRateLimitInSidebar, setShowRateLimitInSidebar] = useState(true);
   const [showSessionRowMetrics, setShowSessionRowMetrics] = useState(true);
+  // Replaces the project path in the Claude terminal header with a cost/context strip.
+  // Only takes effect when the statusline hook has populated authoritative stats for the
+  // session — without it there'd be nothing to show, so the header keeps the path.
+  const [showTerminalHeaderStats, setShowTerminalHeaderStats] = useState(true);
+  // Daily-cost chart + totals panel above the session list on the project page. Same
+  // dependency on the statusline hook — the chart series comes from xshell-stats data.
+  const [showProjectStatsChart, setShowProjectStatsChart] = useState(true);
   const [terminalBgColor, setTerminalBgColor] = useState("#1c1c1b");
   const [defaultTerminalFontSize, setDefaultTerminalFontSize] = useState(12);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
@@ -129,7 +136,7 @@ export default function App() {
     (async () => {
       try {
         const store = await load("settings.json", { defaults: {}, autoSave: true });
-        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender] = await Promise.all([
+        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender, termHeaderStats, projectStatsChart] = await Promise.all([
           store.get<string[]>("project_paths"),
           store.get<Record<string, ProjectSettings>>("project_icons"),
           store.get<Tab[]>("open_tabs"),
@@ -146,6 +153,8 @@ export default function App() {
           store.get<boolean>("session_row_metrics"),
           store.get<ThemeMode>("theme"),
           store.get<boolean>("fullscreen_rendering_enabled"),
+          store.get<boolean>("terminal_header_stats"),
+          store.get<boolean>("project_stats_chart"),
         ]);
         // Layout: prefer the explicit `sidebar_layout` if present; otherwise migrate
         // from the flat `project_paths` list by wrapping each path in a project item.
@@ -171,6 +180,8 @@ export default function App() {
         if (typeof rowMetrics === "boolean") setShowSessionRowMetrics(rowMetrics);
         if (typeof gitNamesOnly === "boolean") setGitPanelFilenamesOnly(gitNamesOnly);
         if (typeof fsRender === "boolean") setFullscreenRendering(fsRender);
+        if (typeof termHeaderStats === "boolean") setShowTerminalHeaderStats(termHeaderStats);
+        if (typeof projectStatsChart === "boolean") setShowProjectStatsChart(projectStatsChart);
         if (storedTheme === "light" || storedTheme === "dark") setTheme(storedTheme);
         // Restore only tabs that have a real sessionId (not abandoned "New Chat" tabs)
         if (savedTabs?.length) {
@@ -358,6 +369,16 @@ export default function App() {
   const persistShowSessionRowMetrics = useCallback(async (enabled: boolean) => {
     setShowSessionRowMetrics(enabled);
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("session_row_metrics", enabled); } catch (_) {}
+  }, []);
+
+  const persistShowTerminalHeaderStats = useCallback(async (enabled: boolean) => {
+    setShowTerminalHeaderStats(enabled);
+    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("terminal_header_stats", enabled); } catch (_) {}
+  }, []);
+
+  const persistShowProjectStatsChart = useCallback(async (enabled: boolean) => {
+    setShowProjectStatsChart(enabled);
+    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("project_stats_chart", enabled); } catch (_) {}
   }, []);
 
   const persistDefaultTerminalFontSize = useCallback(async (size: number) => {
@@ -909,11 +930,11 @@ export default function App() {
         <TabBar tabs={tabs} entries={entries} onRenameGroup={(id, name) => setGroups(prev => prev.map(g => g.id === id ? { ...g, name } : g))} closingTabIds={closingTabIds} activeTabId={activeTabId} selectedProject={selectedProject} hoveredProjectPath={hoveredProjectPath} linkedProjectPath={activeTabProjectPath} activeTabProject={contextProject} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} projectIcons={projectIcons} sidebarCollapsed={sidebarCollapsed} defaultShell={defaultShell} onExpandSidebar={() => setSidebarCollapsed(false)} onSelectTab={setActiveTabId} onCloseTab={handleCloseTab} onReorderTabs={handleReorderTabs} onNewChatInActive={handleNewChatInActive} onNewShellInContext={handleNewShellInContext} onOpenSession={handleOpenSession} onNewShell={handleNewShell} />
         {/* Settings view — hidden unless activeTabId === 'settings' */}
         <div style={{ display: showSettings ? "flex" : "none", flex: 1, overflow: "hidden" }}>
-          <SettingsView theme={theme} onSetTheme={persistTheme} gitLazyPolling={gitLazyPolling} onSetGitLazyPolling={persistGitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} updateInfo={updateInfo} />
+          <SettingsView theme={theme} onSetTheme={persistTheme} gitLazyPolling={gitLazyPolling} onSetGitLazyPolling={persistGitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} showTerminalHeaderStats={showTerminalHeaderStats} onSetShowTerminalHeaderStats={persistShowTerminalHeaderStats} showProjectStatsChart={showProjectStatsChart} onSetShowProjectStatsChart={persistShowProjectStatsChart} updateInfo={updateInfo} />
         </div>
         {/* Home view — hidden when a terminal tab is active */}
         <div style={{ display: showHome ? "flex" : "none", flex: 1, overflow: "hidden" }}>
-          <HomeView contextTreeEnabled={contextTreeEnabled} showSessionRowMetrics={showSessionRowMetrics} projects={userProjects} allProjects={allProjects} selectedProject={selectedProject} projectIcons={projectIcons} recentSessions={recentSessions} projectSessions={projectSessions} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} sessionGroupName={(() => {
+          <HomeView contextTreeEnabled={contextTreeEnabled} showSessionRowMetrics={showSessionRowMetrics} showProjectStatsChart={showProjectStatsChart} projects={userProjects} allProjects={allProjects} selectedProject={selectedProject} projectIcons={projectIcons} recentSessions={recentSessions} projectSessions={projectSessions} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} sessionGroupName={(() => {
             const map: Record<string, string> = {};
             for (const t of tabs) {
               if (t.sessionId && t.groupId) {
@@ -988,7 +1009,7 @@ export default function App() {
             ? (allProjects.find(p => p.path.toLowerCase() === tab.projectPath!.toLowerCase())?.encoded_name || "")
             : "";
           return createPortal(
-            <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitLazyPolling={gitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} fullscreenRendering={fullscreenRendering} theme={theme} projectEncodedName={encodedName} onBranchSwitch={handleSwitchTabToBranch} />,
+            <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitLazyPolling={gitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} fullscreenRendering={fullscreenRendering} theme={theme} projectEncodedName={encodedName} showTerminalHeaderStats={showTerminalHeaderStats} onBranchSwitch={handleSwitchTabToBranch} />,
             host,
           );
         })}

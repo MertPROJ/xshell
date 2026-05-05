@@ -116,6 +116,10 @@ interface TerminalTabProps {
   // `~/.claude/projects/<encoded>/<id>.jsonl`. Empty when the project hasn't been seen by
   // claude yet — in that case the cost/context strip falls back to the project path.
   projectEncodedName: string;
+  // User-controlled override on top of `is_authoritative_stats`. When false, the header
+  // always shows the project path even if stats are available — handy for users who don't
+  // want the cost figure visible in screen-shares.
+  showTerminalHeaderStats: boolean;
   onBranchSwitch: (tabId: string, newSessionId: string, newTitle: string) => void;
 }
 
@@ -154,7 +158,7 @@ const MIN_PANEL = 200;
 const MAX_PANEL = 600;
 const DEFAULT_PANEL = 280;
 
-export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, theme, projectEncodedName, onBranchSwitch }: TerminalTabProps) {
+export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, theme, projectEncodedName, showTerminalHeaderStats, onBranchSwitch }: TerminalTabProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -698,9 +702,10 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
   const gitButtonTooltip = `${showGitPanel ? "Hide" : "Show"} git panel — ${gitStatus?.branch || "detached"}${gitCounts ? ` (${gitCounts})` : ""}`;
 
   // Cost/context strip is only meaningful when xshell-stats has populated authoritative
-  // numbers for this session. Without it, the cost would always be $0 and the bar empty —
-  // misleading. Fall back to the plain path in that case.
-  const showStatsStrip = isClaudeSession && sessionStats?.is_authoritative_stats && sessionStats.context_limit > 0;
+  // numbers for this session AND the user hasn't opted out via the Connect tab toggle.
+  // Without authoritative stats the cost would always be $0 and the bar empty — falls back
+  // to the plain path in that case (or whenever the user has explicitly disabled the strip).
+  const showStatsStrip = isClaudeSession && showTerminalHeaderStats && sessionStats?.is_authoritative_stats && sessionStats.context_limit > 0;
   const ctxPct = showStatsStrip ? Math.min(100, (sessionStats!.context_tokens / sessionStats!.context_limit) * 100) : 0;
 
   return (

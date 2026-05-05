@@ -20,6 +20,7 @@ interface HomeViewProps {
   sessionsLoading: boolean;
   contextTreeEnabled: boolean;
   showSessionRowMetrics: boolean;
+  showProjectStatsChart: boolean;
   onOpenSession: (session: SessionInfo, project?: ProjectInfo) => void;
   onOpenSessionBackground: (session: SessionInfo, project?: ProjectInfo) => void;
   onSelectProject: (project: ProjectInfo) => void;
@@ -87,12 +88,6 @@ function modelTier(raw: string): "opus" | "sonnet" | "haiku" | "unknown" {
   if (m.includes("haiku")) return "haiku";
   if (m.includes("sonnet")) return "sonnet";
   return "unknown";
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
-  return `${n}`;
 }
 
 function formatCost(usd: number): string {
@@ -239,7 +234,7 @@ function SessionRow({ session, isOpen, groupName, onClick, isDragging, onPointer
                 <span className={`session-ctx-bar session-ctx-${contextLevel}`}>
                   <span className="session-ctx-fill" style={{ width: `${contextPct}%` }} />
                 </span>
-                {formatTokens(session.context_tokens)}
+                {contextPct}%
               </span>
             )}
             {showCostContext && session.cost_usd > 0 && <span className="session-metric session-cost" onMouseEnter={(e) => tt?.showTt("Cost reported by Claude Code", e.currentTarget)} onMouseLeave={() => tt?.hideTt()}>{formatCost(session.cost_usd)}</span>}
@@ -334,7 +329,7 @@ function filterSessions(sessions: SessionInfo[], query: string): SessionInfo[] {
   return sessions.filter(s => s.title.toLowerCase().includes(q) || s.project_name.toLowerCase().includes(q) || s.git_branch.toLowerCase().includes(q));
 }
 
-export function HomeView({ projects, selectedProject, projectIcons, recentSessions, projectSessions, openSessionIds, sessionGroupName, loading, sessionsLoading, contextTreeEnabled, showSessionRowMetrics, onOpenSession, onOpenSessionBackground, onSelectProject, onNewChat, onAddProject, onRemoveProject, onEditProject, onSaveFolders }: HomeViewProps) {
+export function HomeView({ projects, selectedProject, projectIcons, recentSessions, projectSessions, openSessionIds, sessionGroupName, loading, sessionsLoading, contextTreeEnabled, showSessionRowMetrics, showProjectStatsChart, onOpenSession, onOpenSessionBackground, onSelectProject, onNewChat, onAddProject, onRemoveProject, onEditProject, onSaveFolders }: HomeViewProps) {
   const [search, setSearch] = useState("");
   // Scroll-driven collapse of the stats strip in the project detail view. Same UX the old
   // preview cards had: scroll down → strip slides up out of view; pull back up at the very
@@ -504,7 +499,7 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
     // The stats panel renders only when at least one session has authoritative cost data;
     // mirror that check here so the "Show stats" chip is gated the same way.
     const hasStats = projectSessions.some(s => s.is_authoritative_stats && s.cost_usd > 0);
-    const showChip = statsCollapsed && !isSearching && hasStats;
+    const showChip = statsCollapsed && !isSearching && hasStats && showProjectStatsChart;
     return (
       <div className="view-fixed fade-in project-detail-split">
         <div className="project-detail-main">
@@ -532,7 +527,7 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
           </div>
 
           <div className="project-detail-scroll" ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel}>
-            {!isSearching && (
+            {!isSearching && showProjectStatsChart && (
               <div className={`project-stats-wrap ${statsCollapsed ? "collapsed" : ""}`}>
                 <ProjectStatsPanel sessions={projectSessions} />
               </div>
