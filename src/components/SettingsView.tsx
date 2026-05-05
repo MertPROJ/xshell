@@ -16,8 +16,8 @@ export type ThemeMode = "dark" | "light";
 interface SettingsViewProps {
   theme: ThemeMode;
   onSetTheme: (theme: ThemeMode) => void;
-  gitPanelEnabled: boolean;
-  onSetGitPanelEnabled: (enabled: boolean) => void;
+  gitLazyPolling: boolean;
+  onSetGitLazyPolling: (enabled: boolean) => void;
   gitPanelFilenamesOnly: boolean;
   onSetGitPanelFilenamesOnly: (enabled: boolean) => void;
   contextTreeEnabled: boolean;
@@ -36,13 +36,18 @@ interface SettingsViewProps {
   onSetShowRateLimitInSidebar: (enabled: boolean) => void;
   showSessionRowMetrics: boolean;
   onSetShowSessionRowMetrics: (enabled: boolean) => void;
+  showTerminalHeaderStats: boolean;
+  onSetShowTerminalHeaderStats: (enabled: boolean) => void;
+  showProjectStatsChart: boolean;
+  onSetShowProjectStatsChart: (enabled: boolean) => void;
   updateInfo: UpdateInfo;
 }
 
-type Category = "appearance" | "terminal" | "behavior" | "about";
+type Category = "appearance" | "connect" | "terminal" | "behavior" | "about";
 
 const CATEGORIES: { id: Category; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
   { id: "appearance", label: "Appearance", icon: Paintbrush },
+  { id: "connect",    label: "Connect",    icon: Sparkles },
   { id: "terminal",   label: "Terminal",   icon: TerminalIcon },
   { id: "behavior",   label: "Behavior",   icon: SettingsIcon },
   { id: "about",      label: "About",      icon: Info },
@@ -84,7 +89,7 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanelEnabled, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, updateInfo }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
@@ -106,7 +111,7 @@ export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanel
     <div className="settings-view fade-in">
       <div className="settings-view-header">
         <h1 className="settings-view-title">Settings</h1>
-        <p className="settings-view-subtitle">Configure appearance, terminal behavior, and how the window behaves.</p>
+        <p className="settings-view-subtitle">Configure appearance, connect to Claude Code, terminal behavior, and how the window behaves.</p>
       </div>
       <div className="settings-view-layout">
         <div className="settings-nav">
@@ -116,6 +121,8 @@ export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanel
               <span>{label}</span>
               {/* Tells the user where the +1 on the Settings cog is coming from. */}
               {id === "about" && updateInfo.updateAvailable && <span className="settings-nav-dot" title="Update available" />}
+              {/* Nudge new users toward the Claude Code hookup — drops once they've connected. */}
+              {id === "connect" && !statslineConfigured && <span className="settings-nav-dot settings-nav-dot-recommended" title="Recommended setup" />}
             </div>
           ))}
         </div>
@@ -137,16 +144,37 @@ export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanel
                   <Toggle checked={contextTreeEnabled} onChange={onSetContextTreeEnabled} />
                 </SettingRow>
               </Section>
+            </>
+          )}
 
-              <Section title="Session metrics" description="Live cost, context, and rate-limit data sourced from Claude Code. Both toggles below depend on the connection set up here — without it they have no data and stay hidden regardless of the toggle state.">
+          {active === "connect" && (
+            <>
+              <div className="settings-connect-hero">
+                <div className="settings-connect-hero-icon"><Sparkles size={18} /></div>
+                <div className="settings-connect-hero-text">
+                  <div className="settings-connect-hero-title">{statslineConfigured ? "You're connected" : "Recommended setup"}</div>
+                  <div className="settings-connect-hero-sub">{statslineConfigured ? "xshell is reading live cost, context, and rate-limit data from Claude Code. The toggles below control which surfaces use it." : "Connect xshell to Claude Code in one click for live cost, context, and rate-limit tracking — powers the header strip, sidebar chip, and per-session metrics."}</div>
+                </div>
+                {!statslineConfigured && (
+                  <button className="btn btn-primary settings-connect-cta" onClick={() => setWizardOpen(true)}><Sparkles size={12} /> Connect</button>
+                )}
+              </div>
+
+              <Section title="Session metrics" description="Live cost, context, and rate-limit data sourced from Claude Code. The toggles below depend on the connection — without it they have no data and stay hidden regardless of state.">
                 <SettingRow title="Connect to Claude Code" description="One-time setup that lets xshell read live cost, context, and rate-limit data straight from Claude Code (cost stays monotonic across resumes, daily breakdown is captured for the trendline). The wizard handles it in a click — no restart needed.">
-                  <button className="btn btn-ghost settings-action-btn" onClick={() => setWizardOpen(true)}><Sparkles size={11} /> Configure…</button>
+                  <button className="btn btn-primary settings-action-btn" onClick={() => setWizardOpen(true)}><Sparkles size={11} /> {statslineConfigured ? "Reconfigure…" : "Configure…"}</button>
                 </SettingRow>
                 <SettingRow title="Rate limit in sidebar" description={statslineConfigured ? "Show the small percentage chip above the Settings cog. Hover for a popover with 5h / 7d usage breakdown and reset times." : "Connect to Claude Code above to enable this — the chip needs live rate-limit data."}>
                   <Toggle checked={showRateLimitInSidebar} onChange={onSetShowRateLimitInSidebar} disabled={!statslineConfigured} />
                 </SettingRow>
                 <SettingRow title="Detailed info on session rows" description={statslineConfigured ? "Show context bar and cost figure on each session row. Model and message count always show — those are reliable from the JSONL alone." : "Connect to Claude Code above to enable this — the context bar and cost figure both come from the live data feed."}>
                   <Toggle checked={showSessionRowMetrics} onChange={onSetShowSessionRowMetrics} disabled={!statslineConfigured} />
+                </SettingRow>
+                <SettingRow title="Cost & context in terminal header" description={statslineConfigured ? "Replace the project path above each Claude terminal with a live progress bar of context usage and total session cost. Falls back to the path automatically for sessions that don't yet have stats data." : "Connect to Claude Code above to enable this — without the hook there's no live cost or context to render."}>
+                  <Toggle checked={showTerminalHeaderStats} onChange={onSetShowTerminalHeaderStats} disabled={!statslineConfigured} />
+                </SettingRow>
+                <SettingRow title="Stats chart on project page" description={statslineConfigured ? "Show the daily-cost area chart and totals tile above the session list when a project is selected. Hides automatically for projects with no recorded cost." : "Connect to Claude Code above to enable this — the chart series comes from the live data feed."}>
+                  <Toggle checked={showProjectStatsChart} onChange={onSetShowProjectStatsChart} disabled={!statslineConfigured} />
                 </SettingRow>
               </Section>
             </>
@@ -194,11 +222,11 @@ export function SettingsView({ theme, onSetTheme, gitPanelEnabled, onSetGitPanel
                 </SettingRow>
               </Section>
 
-              <Section title="Git panel" description="Inline git status shown alongside Claude terminal tabs.">
-                <SettingRow title="Show git panel" description="Show the branch indicator and side panel inside Claude terminal tabs. Turning this off also stops the background git status polling.">
-                  <Toggle checked={gitPanelEnabled} onChange={onSetGitPanelEnabled} />
+              <Section title="Terminal sidebar" description="Right-side activity bar inside Claude terminal tabs.">
+                <SettingRow title="Only poll git when panel is open" description="When on (default), git status is fetched once when the Claude session starts, then again only while the git panel is open. Turn off to keep polling every few seconds even when the panel is closed.">
+                  <Toggle checked={gitLazyPolling} onChange={onSetGitLazyPolling} />
                 </SettingRow>
-                <SettingRow title="Filenames only" description="Show just the file name (basename) instead of the full relative path. Hover a row to see the full path.">
+                <SettingRow title="Filenames only" description="In the git panel, show just the file name (basename) instead of the full relative path. Hover a row to see the full path.">
                   <Toggle checked={gitPanelFilenamesOnly} onChange={onSetGitPanelFilenamesOnly} />
                 </SettingRow>
               </Section>
