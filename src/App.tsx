@@ -115,6 +115,11 @@ export default function App() {
   // frames — fixes the "flying letters" residue where xterm would otherwise see
   // half-drawn intermediate frames. Default ON — strongly recommended.
   const [forceSyncOutput, setForceSyncOutput] = useState(true);
+  // Spawn each restored tab's PTY on app launch instead of deferring until the user clicks the
+  // tab. Default ON — claude takes a few seconds to boot, so eagerly initing means the session
+  // is ready (or close to it) by the time the user switches to the tab. The "Starting Claude…"
+  // overlay still shows if the user gets there before the first byte of output.
+  const [eagerInitTabs, setEagerInitTabs] = useState(true);
   const [defaultShell, setDefaultShell] = useState<string>(getDefaultShellId());
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [showProjectPicker, setShowProjectPicker] = useState(false);
@@ -141,7 +146,7 @@ export default function App() {
     (async () => {
       try {
         const store = await load("settings.json", { defaults: {}, autoSave: true });
-        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender, termHeaderStats, projectStatsChart, syncOut] = await Promise.all([
+        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender, termHeaderStats, projectStatsChart, syncOut, eagerInit] = await Promise.all([
           store.get<string[]>("project_paths"),
           store.get<Record<string, ProjectSettings>>("project_icons"),
           store.get<Tab[]>("open_tabs"),
@@ -161,6 +166,7 @@ export default function App() {
           store.get<boolean>("terminal_header_stats"),
           store.get<boolean>("project_stats_chart"),
           store.get<boolean>("force_sync_output_enabled"),
+          store.get<boolean>("eager_init_tabs"),
         ]);
         // Layout: prefer the explicit `sidebar_layout` if present; otherwise migrate
         // from the flat `project_paths` list by wrapping each path in a project item.
@@ -187,6 +193,7 @@ export default function App() {
         if (typeof gitNamesOnly === "boolean") setGitPanelFilenamesOnly(gitNamesOnly);
         if (typeof fsRender === "boolean") setFullscreenRendering(fsRender);
         if (typeof syncOut === "boolean") setForceSyncOutput(syncOut);
+        if (typeof eagerInit === "boolean") setEagerInitTabs(eagerInit);
         if (typeof termHeaderStats === "boolean") setShowTerminalHeaderStats(termHeaderStats);
         if (typeof projectStatsChart === "boolean") setShowProjectStatsChart(projectStatsChart);
         if (storedTheme === "light" || storedTheme === "dark") setTheme(storedTheme);
@@ -418,6 +425,11 @@ export default function App() {
   const persistForceSyncOutput = useCallback(async (enabled: boolean) => {
     setForceSyncOutput(enabled);
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("force_sync_output_enabled", enabled); } catch (_) {}
+  }, []);
+
+  const persistEagerInitTabs = useCallback(async (enabled: boolean) => {
+    setEagerInitTabs(enabled);
+    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("eager_init_tabs", enabled); } catch (_) {}
   }, []);
 
   // Apply synchronously alongside the React state change so the next paint already has
@@ -969,7 +981,7 @@ export default function App() {
         <TabBar tabs={tabs} entries={entries} onRenameGroup={(id, name) => setGroups(prev => prev.map(g => g.id === id ? { ...g, name } : g))} closingTabIds={closingTabIds} activeTabId={activeTabId} selectedProject={selectedProject} hoveredProjectPath={hoveredProjectPath} linkedProjectPath={activeTabProjectPath} activeTabProject={contextProject} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} projectIcons={projectIcons} pinnedProjects={userProjects} sidebarCollapsed={sidebarCollapsed} defaultShell={defaultShell} onExpandSidebar={() => setSidebarCollapsed(false)} onSelectTab={handleSelectTab} onCloseTab={handleCloseTab} onReorderTabs={handleReorderTabs} onNewChat={handleNewChat} onNewChatInActive={handleNewChatInActive} onNewShellInContext={handleNewShellInContext} onOpenSession={handleOpenSession} onNewShell={handleNewShell} onGoHome={handleGoHome} onOpenSettings={() => setActiveTabId("settings")} onToggleSidebar={() => setSidebarCollapsed(c => !c)} />
         {/* Settings view — hidden unless activeTabId === 'settings' */}
         <div style={{ display: showSettings ? "flex" : "none", flex: 1, overflow: "hidden" }}>
-          <SettingsView theme={theme} onSetTheme={persistTheme} gitLazyPolling={gitLazyPolling} onSetGitLazyPolling={persistGitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} forceSyncOutput={forceSyncOutput} onSetForceSyncOutput={persistForceSyncOutput} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} showTerminalHeaderStats={showTerminalHeaderStats} onSetShowTerminalHeaderStats={persistShowTerminalHeaderStats} showProjectStatsChart={showProjectStatsChart} onSetShowProjectStatsChart={persistShowProjectStatsChart} updateInfo={updateInfo} />
+          <SettingsView theme={theme} onSetTheme={persistTheme} gitLazyPolling={gitLazyPolling} onSetGitLazyPolling={persistGitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} forceSyncOutput={forceSyncOutput} onSetForceSyncOutput={persistForceSyncOutput} eagerInitTabs={eagerInitTabs} onSetEagerInitTabs={persistEagerInitTabs} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} showTerminalHeaderStats={showTerminalHeaderStats} onSetShowTerminalHeaderStats={persistShowTerminalHeaderStats} showProjectStatsChart={showProjectStatsChart} onSetShowProjectStatsChart={persistShowProjectStatsChart} updateInfo={updateInfo} />
         </div>
         {/* Home view — hidden when a terminal tab is active */}
         <div style={{ display: showHome ? "flex" : "none", flex: 1, overflow: "hidden" }}>
@@ -1052,7 +1064,7 @@ export default function App() {
           // the subtree (which kills the PTY in TerminalTab's cleanup). Keying by tab.id
           // makes a reorder a pure move — the TerminalTab instance, xterm, and PTY survive.
           return createPortal(
-            <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitLazyPolling={gitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} fullscreenRendering={fullscreenRendering} forceSyncOutput={forceSyncOutput} theme={theme} projectEncodedName={encodedName} showTerminalHeaderStats={showTerminalHeaderStats} onBranchSwitch={handleSwitchTabToBranch} />,
+            <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitLazyPolling={gitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} fullscreenRendering={fullscreenRendering} forceSyncOutput={forceSyncOutput} eagerInit={eagerInitTabs} theme={theme} projectEncodedName={encodedName} showTerminalHeaderStats={showTerminalHeaderStats} onBranchSwitch={handleSwitchTabToBranch} />,
             host,
             tab.id,
           );
