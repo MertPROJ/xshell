@@ -775,12 +775,29 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .settings-version-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 600; letter-spacing: 0.3px; }
 .settings-version-chip-new { background: rgba(229, 72, 77, 0.18); color: #f87277; border: 1px solid rgba(229, 72, 77, 0.4); }
 .settings-version-chip-ok { background: rgba(63, 153, 84, 0.14); color: var(--success); border: 1px solid rgba(63, 153, 84, 0.32); }
-.settings-release-notes { margin-top: 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-deep); }
-.settings-release-notes-head { font-size: 10px; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.6px; padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); }
-/* Wrapper only provides padding + scroll; typography comes from the nested .md-content. */
-.settings-release-notes-body { padding: 10px 14px; max-height: 320px; overflow: auto; }
-.settings-release-notes-body.md-content > *:first-child { margin-top: 0; }
-.settings-release-notes-body.md-content > *:last-child { margin-bottom: 0; }
+/* About → Update row: stack the action buttons over an inline error/hint banner. */
+.settings-update-col { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.settings-install-error { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid rgba(229, 72, 77, 0.4); background: rgba(229, 72, 77, 0.12); color: #f87277; border-radius: var(--radius-sm); font-size: 11px; }
+.settings-install-error .btn { color: inherit; }
+.settings-install-hint { font-size: 11px; color: var(--text-tertiary); padding: 0 4px; max-width: 360px; text-align: right; }
+.settings-spin { animation: settings-spin 0.9s linear infinite; }
+@keyframes settings-spin { to { transform: rotate(360deg); } }
+
+/* Changelog list under About → Version. Each row is collapsed by default; clicking the
+   header rotates the chevron and reveals the markdown-rendered release notes. */
+.settings-changelog { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-deep); overflow: hidden; }
+.settings-changelog-row { border-bottom: 1px solid var(--border-subtle); }
+.settings-changelog-row:last-child { border-bottom: none; }
+.settings-changelog-toggle { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 12px; background: transparent; border: 0; color: var(--text-primary); cursor: pointer; text-align: left; font-size: 12px; transition: background 0.12s; }
+.settings-changelog-toggle:hover { background: var(--bg-hover); }
+.settings-changelog-chevron { color: var(--text-tertiary); transition: transform 0.15s; flex-shrink: 0; }
+.settings-changelog-row.is-open .settings-changelog-chevron { transform: rotate(90deg); }
+.settings-changelog-version { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); }
+.settings-changelog-date { margin-left: auto; font-size: 11px; color: var(--text-tertiary); }
+.settings-changelog-body { padding: 4px 14px 12px 30px; max-height: 320px; overflow: auto; border-top: 1px solid var(--border-subtle); background: var(--bg-base); }
+.settings-changelog-body.md-content > *:first-child { margin-top: 8px; }
+.settings-changelog-body.md-content > *:last-child { margin-bottom: 0; }
+.settings-changelog-link { margin-top: 10px; padding: 4px 10px; font-size: 11px; gap: 5px; }
 .settings-layout { display: flex; flex: 1; min-height: 0; }
 .settings-nav { width: 160px; flex-shrink: 0; background: var(--bg-deep); border-right: 1px solid var(--border-subtle); padding: 8px 6px; display: flex; flex-direction: column; gap: 2px; }
 .settings-nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius-sm); font-size: 12px; color: var(--text-tertiary); cursor: pointer; transition: background 0.12s, color 0.12s; }
@@ -1115,6 +1132,9 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .upd-summary strong { font-family: var(--font-mono); font-weight: 700; color: var(--accent-coral); }
 .upd-install { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
 .upd-install code { font-family: var(--font-mono); font-size: 11px; padding: 1px 6px; background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: 4px; color: var(--text-primary); }
+/* Reuse the Settings install banner/hint styling but stretch full width inside the dialog. */
+.upd-install-error { align-self: stretch; }
+.upd-install-hint { max-width: none; text-align: left; padding: 0; }
 /* Inline click-to-copy snippet — looks like a code chip with a tiny copy icon trailing it.
    Wrapped in a <button> so keyboard focus + Enter also fire the copy action. */
 .code-copy { display: inline-flex; align-items: center; gap: 5px; padding: 1px 6px 1px 6px; background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: 4px; color: var(--text-primary); cursor: pointer; vertical-align: baseline; font: inherit; transition: background 0.12s, border-color 0.12s, color 0.12s; }
