@@ -1581,6 +1581,10 @@ fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, sessio
         for a in &claude_args { c.arg(a); }
         c
     };
+    // Tag the terminal so Claude Code's OTEL telemetry attributes sessions to this app
+    // (telemetry reads `terminal.type` from TERM_PROGRAM; without this we'd land in the
+    // Unknown bucket). Always set — no user-facing toggle.
+    cmd.env("TERM_PROGRAM", "xshell.sh");
     // Claude Code's flicker-free / alternate-screen-buffer renderer is opt-in via env var.
     // Default ON for any claude-mode spawn; raw shells don't get it (no claude process to read it).
     // Inherited by the wrapping shell → claude child, so setting it here is sufficient.
