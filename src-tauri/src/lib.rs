@@ -1434,7 +1434,7 @@ fn git_checkout(cwd: String, branch: String) -> Result<(), String> {
 // ── Terminal / PTY Commands ────────────────────────────────────────────
 
 #[tauri::command]
-fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, session_id: Option<String>, custom_name: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>, fullscreen_rendering: Option<bool>) -> Result<(), String> {
+fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, session_id: Option<String>, custom_name: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>, fullscreen_rendering: Option<bool>, force_sync_output: Option<bool>) -> Result<(), String> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| format!("Failed to open PTY: {}", e))?;
 
@@ -1518,6 +1518,14 @@ fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, sessio
     // Inherited by the wrapping shell → claude child, so setting it here is sufficient.
     if mode != "raw" && fullscreen_rendering.unwrap_or(true) {
         cmd.env("CLAUDE_CODE_NO_FLICKER", "1");
+    }
+    // Force synchronized output mode (DEC 2026). Claude's auto-detection looks at $TERM
+    // and won't enable sync output for plain xterm-256color, but xterm.js v5+ supports it
+    // natively. With this flag, claude wraps each TUI frame in \x1b[?2026h..\x1b[?2026l
+    // so xterm renders only complete frames — fixes the "flying letters" residue we get
+    // when xterm sees half-drawn frames. Requires Claude Code ≥ 2.1.129.
+    if mode != "raw" && force_sync_output.unwrap_or(true) {
+        cmd.env("CLAUDE_CODE_FORCE_SYNC_OUTPUT", "1");
     }
     // Empty cwd → fall back to the user's home directory (raw shells launched from home view).
     let effective_cwd = if cwd.is_empty() {

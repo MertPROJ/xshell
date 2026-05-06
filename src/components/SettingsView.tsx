@@ -32,6 +32,8 @@ interface SettingsViewProps {
   onSetDefaultShell: (shellId: string) => void;
   fullscreenRendering: boolean;
   onSetFullscreenRendering: (enabled: boolean) => void;
+  forceSyncOutput: boolean;
+  onSetForceSyncOutput: (enabled: boolean) => void;
   showRateLimitInSidebar: boolean;
   onSetShowRateLimitInSidebar: (enabled: boolean) => void;
   showSessionRowMetrics: boolean;
@@ -89,7 +91,7 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
@@ -216,9 +218,12 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                 </SettingRow>
               </Section>
 
-              <Section title="Claude Code" description="Tweaks applied to every Claude session launched from xshell.">
-                <SettingRow title="Full screen rendering" description="Switch Claude Code into the alternate-screen-buffer renderer (no scrollback, no flicker on every refresh). Sets CLAUDE_CODE_NO_FLICKER=1 on each new claude session — open sessions keep their current mode until next launch.">
+              <Section title="Claude Code" description="Tweaks applied to every Claude session launched from xshell. Both toggles below are highly recommended to keep ON — they fix rendering issues that are specific to running Claude Code inside an xterm.js host.">
+                <SettingRow title="Full screen rendering" description="Switch Claude Code into the alternate-screen-buffer renderer (no scrollback, no flicker on every refresh). Sets CLAUDE_CODE_NO_FLICKER=1 on each new claude session — open sessions keep their current mode until next launch. Introduced in Claude Code 2.1.89 (April 1, 2026).">
                   <Toggle checked={fullscreenRendering} onChange={onSetFullscreenRendering} />
+                </SettingRow>
+                <SettingRow title="Force synchronized output" description="Tells Claude Code to wrap each TUI frame in DEC 2026 synchronized-output markers, so xterm.js renders only complete frames — fixes the 'flying letters' residue from half-drawn redraws. Sets CLAUDE_CODE_FORCE_SYNC_OUTPUT=1 on each new claude session. Introduced in Claude Code 2.1.129 (May 6, 2026).">
+                  <Toggle checked={forceSyncOutput} onChange={onSetForceSyncOutput} />
                 </SettingRow>
               </Section>
 
