@@ -1047,9 +1047,14 @@ export default function App() {
           const encodedName = tab.projectPath
             ? (allProjects.find(p => p.path.toLowerCase() === tab.projectPath!.toLowerCase())?.encoded_name || "")
             : "";
+          // The third arg is the portal's key — without it, this array reconciles by index,
+          // so reordering tabs shuffles which host each portal targets and React remounts
+          // the subtree (which kills the PTY in TerminalTab's cleanup). Keying by tab.id
+          // makes a reorder a pure move — the TerminalTab instance, xterm, and PTY survive.
           return createPortal(
             <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitLazyPolling={gitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} fullscreenRendering={fullscreenRendering} forceSyncOutput={forceSyncOutput} theme={theme} projectEncodedName={encodedName} showTerminalHeaderStats={showTerminalHeaderStats} onBranchSwitch={handleSwitchTabToBranch} />,
             host,
+            tab.id,
           );
         })}
       </div>
