@@ -1011,6 +1011,57 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .trend-band-cache-creation { fill: color-mix(in oklab, #7aa2f7 65%, transparent); }
 .trend-band-input          { fill: color-mix(in oklab, var(--accent-coral) 65%, transparent); }
 .trend-band-output         { fill: color-mix(in oklab, var(--accent-terracotta) 80%, transparent); }
+
+/* Stage wraps the SVG so the absolutely-positioned hover tooltip can be anchored to the
+   chart's coordinate space without affecting axis/ticks layout above and below. */
+.trend-chart-stage { position: relative; }
+
+/* Hover tooltip — multi-band only. Anchored to the hover x-position via a percentage left
+   (or right, when flipped). Pointer-events:none so it never steals hover from the SVG. */
+.trend-tooltip {
+  position: absolute; top: 0; pointer-events: none;
+  min-width: 140px; padding: 6px 8px; border-radius: 6px;
+  background: var(--bg-deep); border: 1px solid var(--border-subtle);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  font-size: 10px; line-height: 1.4; color: var(--text-default);
+  font-variant-numeric: tabular-nums;
+  z-index: 2;
+}
+.trend-tooltip-date { font-weight: 600; font-size: 9px; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
+.trend-tooltip-row { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 6px; }
+.trend-tooltip-swatch { width: 8px; height: 8px; border-radius: 2px; }
+.trend-tooltip-label { color: var(--text-default); }
+.trend-tooltip-value { color: var(--text-muted); }
+.trend-tooltip-total { margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--border-subtle); grid-template-columns: 1fr auto; }
+.trend-tooltip-total .trend-tooltip-label,
+.trend-tooltip-total .trend-tooltip-value { color: var(--text-default); font-weight: 600; }
+/* Swatches reuse the same fill rules as the SVG bands so colors stay in sync. */
+.trend-tooltip-swatch.trend-band-cache-read,
+.trend-legend-swatch.trend-band-cache-read     { background: color-mix(in oklab, #6c8ea4 70%, transparent); }
+.trend-tooltip-swatch.trend-band-cache-creation,
+.trend-legend-swatch.trend-band-cache-creation { background: color-mix(in oklab, #7aa2f7 65%, transparent); }
+.trend-tooltip-swatch.trend-band-input,
+.trend-legend-swatch.trend-band-input          { background: color-mix(in oklab, var(--accent-coral) 65%, transparent); }
+.trend-tooltip-swatch.trend-band-output,
+.trend-legend-swatch.trend-band-output         { background: color-mix(in oklab, var(--accent-terracotta) 80%, transparent); }
+
+/* Legend below the tokens chart. Each chip is a full button: swatch · label · per-band
+   total. Click to mute that band — the chip dims and the swatch goes hollow so the muted
+   state is obvious at a glance. */
+.trend-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.trend-legend-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px; border-radius: 999px;
+  background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+  font: inherit; font-size: 10px; color: var(--text-default);
+  cursor: pointer; transition: opacity 0.12s, background 0.12s;
+}
+.trend-legend-chip:hover { background: var(--bg-deep); }
+.trend-legend-chip.is-hidden { opacity: 0.4; }
+.trend-legend-chip.is-hidden .trend-legend-swatch { background: transparent !important; box-shadow: inset 0 0 0 1px var(--text-muted); }
+.trend-legend-swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.trend-legend-label { font-weight: 500; }
+.trend-legend-value { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .trend-baseline { stroke: var(--border-subtle); stroke-width: 1; }
 .trend-today-dot { fill: var(--accent-terracotta); stroke: var(--bg-deep); stroke-width: 1.5; }
 .trend-hover line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 2; opacity: 0.5; }

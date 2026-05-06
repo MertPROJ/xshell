@@ -113,6 +113,12 @@ function formatTokens(n: number): string {
 // cheapest band sits visually at the bottom and pricier bands stack above.
 type SeriesPoint = { date: string; values: number[] };
 
+// Token band ordering used everywhere downstream — chart bands, legend chips, hover tooltip.
+// Bottom→top in cost-impact order so the cheapest category forms the base of the stack and
+// the most expensive sits visually on top of the pile.
+const TOKEN_BAND_CLASSES = ["trend-band-cache-read", "trend-band-cache-creation", "trend-band-input", "trend-band-output"];
+const TOKEN_BAND_LABELS  = ["Cache read", "Cache creation", "Input", "Output"];
+
 // Aggregate per-day cost across a project's sessions and produce a continuous N-day series
 // (oldest → newest, missing days = 0). The hook only stores days that had spending, so we
 // pad zeros for quiet days — that's what makes the trendline read as a real trend rather
@@ -171,41 +177,48 @@ function shortDate(iso: string): string {
 }
 
 // Smooth area chart for either a single-band metric (cost) or a stacked multi-band metric
-// (tokens). Renders one filled area per band, a polyline along the topmost band, a "today"
-// dot, and a hover crosshair. SVG uses a fixed viewBox in pixel space so path math is clean,
-// but stretches via CSS to fit the parent container.
+// (tokens). Renders one filled area per visible band, a polyline along the topmost visible
+// band, a "today" dot, a hover crosshair, and (in multi-band mode) a hover tooltip with
+// per-band breakdown. SVG uses a fixed viewBox in pixel space so path math is clean, but
+// stretches via CSS to fit the parent container.
 //
-// `bandClasses` are SVG-class names per band (bottom→top order), each styled in App.css with
-// its own currentColor / opacity so cache_read reads visually distinct from output.
+// `bandClasses`/`bandLabels` are paired arrays (bottom→top order). `visibleBands` lets the
+// caller hide a dominant band so smaller bands become readable — the chart re-scales to fit
+// only the visible bands' totals.
 function MetricAreaChart({
-  series, bandClasses, format, height = 96,
+  series, bandClasses, bandLabels, visibleBands, format, height = 96,
 }: {
   series: SeriesPoint[];
   bandClasses: string[];
+  bandLabels?: string[];
+  visibleBands?: boolean[];
   format: (n: number) => string;
   height?: number;
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   const W = 600; // viewBox width (px); the SVG itself is width:100% via CSS
   const padL = 4, padR = 4, padT = 6, padB = 14;
   const innerW = W - padL - padR;
   const innerH = height - padT - padB;
   const bandCount = bandClasses.length;
-  // Stacked totals (sum of all bands) per point — used for both the y-scale and the trend line.
-  const totals = series.map(p => p.values.reduce((a, b) => a + b, 0));
+  const visible = visibleBands ?? bandClasses.map(() => true);
+  // Per-band visible value at point i — hidden bands contribute zero so the y-axis re-scales
+  // to whatever's left. Cumulative sums use these masked values too.
+  const visibleVal = (i: number, k: number) => (visible[k] ? series[i].values[k] : 0);
+  const cumAt: number[][] = series.map((_, i) => {
+    let acc = 0;
+    return bandClasses.map((_, k) => (acc += visibleVal(i, k)));
+  });
+  const totals = cumAt.map(row => row[row.length - 1]);
   const max = totals.reduce((m, v) => Math.max(m, v), 0);
   const x = (i: number) => series.length <= 1 ? padL + innerW / 2 : padL + (i / (series.length - 1)) * innerW;
   const y = (v: number) => max <= 0 ? padT + innerH : padT + innerH - (v / max) * innerH;
 
-  // For each point, pre-compute the cumulative sum at each band boundary so band paths
-  // can stack cleanly. cumAt[i][k] is the running total after band k at point i.
-  const cumAt: number[][] = series.map(p => {
-    let acc = 0;
-    return p.values.map(v => (acc += v));
-  });
-  // Path for a single band k: top edge along cumAt[*][k], bottom edge along cumAt[*][k-1]
-  // (or 0 for k=0). Closed shape so the gradient fill clips correctly.
+  // Path for a single band k. The bottom edge tracks the cumulative-sum frontier of the
+  // bands BELOW k that are still visible — when a lower band is hidden, k's bottom drops
+  // to whatever's left underneath, so it stacks against the next visible neighbor.
   const bandPath = (k: number) => {
     const top: string[] = [];
     const bot: string[] = [];
@@ -217,14 +230,12 @@ function MetricAreaChart({
     bot.reverse();
     return `${top.join(" ")} ${bot.join(" ")} Z`;
   };
-
-  // Topmost outline — runs along the total-sum (top of the highest band). This is the line
-  // that visually defines the trend regardless of how many bands are in play.
   const linePath = series.map((_, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(totals[i]).toFixed(1)}`).join(" ");
 
   const todayIdx = series.length - 1;
   const hovered = hoverIdx != null ? { point: series[hoverIdx], total: totals[hoverIdx] } : null;
   const grandTotal = totals.reduce((a, b) => a + b, 0);
+  const peak = max;
 
   // Three date ticks: oldest, middle, newest. Skip middle if the range is too short.
   const ticks = series.length >= 3
@@ -240,40 +251,106 @@ function MetricAreaChart({
     setHoverIdx(idx);
   };
 
-  const peak = max;
+  // Tooltip lives in HTML space (not SVG) so font + layout stay consistent with the rest of
+  // the panel. We position by the SVG's hover x ratio relative to the wrapper, and flip to
+  // the left side of the cursor when hovering near the right edge so it never gets clipped.
+  let tooltipStyle: React.CSSProperties | undefined;
+  if (hovered && hoverIdx != null && wrapRef.current && bandCount > 1) {
+    const ratio = x(hoverIdx) / W;
+    const flipLeft = ratio > 0.6;
+    tooltipStyle = {
+      [flipLeft ? "right" : "left"]: `${flipLeft ? (1 - ratio) * 100 : ratio * 100}%`,
+      [flipLeft ? "marginRight" : "marginLeft"]: 8,
+    } as React.CSSProperties;
+  }
+
   return (
-    <div className="trend-chart">
+    <div className="trend-chart" ref={wrapRef}>
       <div className="trend-chart-axis">
         <span>{hovered ? shortDate(hovered.point.date) : `Last ${series.length} days`}</span>
         <span>{hovered ? format(hovered.total) : `${format(grandTotal)} total · peak ${format(peak)}`}</span>
       </div>
-      <svg ref={svgRef} className={`trend-chart-svg ${bandCount > 1 ? "trend-stacked" : ""}`} viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none" onMouseMove={handleMove} onMouseLeave={() => setHoverIdx(null)}>
-        <defs>
-          <linearGradient id="metric-area-grad" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="currentColor" stopOpacity="0.45" />
-            <stop offset="100%" stopColor="currentColor" stopOpacity="0.02" />
-          </linearGradient>
-        </defs>
-        {/* One filled path per band, bottom→top. Single-band charts still flow through here. */}
-        {max > 0 && bandClasses.map((cls, k) => (
-          <path key={k} d={bandPath(k)} className={`trend-band ${cls}`} />
-        ))}
-        {max > 0 && <path d={linePath} className="trend-line" />}
-        {/* baseline */}
-        <line x1={padL} x2={W - padR} y1={padT + innerH + 0.5} y2={padT + innerH + 0.5} className="trend-baseline" />
-        {/* today dot */}
-        {max > 0 && totals[todayIdx] > 0 && <circle cx={x(todayIdx)} cy={y(totals[todayIdx])} r="3" className="trend-today-dot" />}
-        {/* hover crosshair + dot */}
-        {hovered && (
-          <g className="trend-hover">
-            <line x1={x(hoverIdx!)} x2={x(hoverIdx!)} y1={padT} y2={padT + innerH} />
-            {hovered.total > 0 && <circle cx={x(hoverIdx!)} cy={y(hovered.total)} r="3.5" />}
-          </g>
+      <div className="trend-chart-stage">
+        <svg ref={svgRef} className={`trend-chart-svg ${bandCount > 1 ? "trend-stacked" : ""}`} viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none" onMouseMove={handleMove} onMouseLeave={() => setHoverIdx(null)}>
+          <defs>
+            <linearGradient id="metric-area-grad" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="currentColor" stopOpacity="0.45" />
+              <stop offset="100%" stopColor="currentColor" stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          {/* One filled path per visible band, bottom→top. Hidden bands are skipped entirely. */}
+          {max > 0 && bandClasses.map((cls, k) => (
+            visible[k] ? <path key={k} d={bandPath(k)} className={`trend-band ${cls}`} /> : null
+          ))}
+          {max > 0 && <path d={linePath} className="trend-line" />}
+          {/* baseline */}
+          <line x1={padL} x2={W - padR} y1={padT + innerH + 0.5} y2={padT + innerH + 0.5} className="trend-baseline" />
+          {/* today dot */}
+          {max > 0 && totals[todayIdx] > 0 && <circle cx={x(todayIdx)} cy={y(totals[todayIdx])} r="3" className="trend-today-dot" />}
+          {/* hover crosshair + dot */}
+          {hovered && (
+            <g className="trend-hover">
+              <line x1={x(hoverIdx!)} x2={x(hoverIdx!)} y1={padT} y2={padT + innerH} />
+              {hovered.total > 0 && <circle cx={x(hoverIdx!)} cy={y(hovered.total)} r="3.5" />}
+            </g>
+          )}
+        </svg>
+        {/* Hover tooltip (multi-band only). Single-band charts already show the day total in
+            the axis row, so a duplicate tooltip would just be noise. */}
+        {hovered && bandCount > 1 && bandLabels && tooltipStyle && (
+          <div className="trend-tooltip" style={tooltipStyle}>
+            <div className="trend-tooltip-date">{shortDate(hovered.point.date)}</div>
+            {bandLabels.map((label, k) => (
+              visible[k] ? (
+                <div key={k} className="trend-tooltip-row">
+                  <span className={`trend-tooltip-swatch ${bandClasses[k]}`} />
+                  <span className="trend-tooltip-label">{label}</span>
+                  <span className="trend-tooltip-value">{format(hovered.point.values[k] || 0)}</span>
+                </div>
+              ) : null
+            ))}
+            <div className="trend-tooltip-row trend-tooltip-total">
+              <span className="trend-tooltip-label">Total</span>
+              <span className="trend-tooltip-value">{format(hovered.total)}</span>
+            </div>
+          </div>
         )}
-      </svg>
+      </div>
       <div className="trend-chart-ticks">
         {ticks.map(t => <span key={t.i} style={{ left: `${(x(t.i) / W) * 100}%` }}>{t.label}</span>)}
       </div>
+    </div>
+  );
+}
+
+// Clickable color-keyed legend for the multi-band token chart. Click a chip to hide its
+// band — the chart re-stacks and re-scales the y-axis to fit what's left, so a dominant
+// cache_read band can be muted to expose the smaller bands underneath.
+function MetricLegend({
+  bandLabels, bandClasses, totals, visible, onToggle, format,
+}: {
+  bandLabels: string[];
+  bandClasses: string[];
+  totals: number[];
+  visible: boolean[];
+  onToggle: (k: number) => void;
+  format: (n: number) => string;
+}) {
+  return (
+    <div className="trend-legend" role="group" aria-label="Token band visibility">
+      {bandLabels.map((label, k) => (
+        <button
+          key={k}
+          type="button"
+          className={`trend-legend-chip ${visible[k] ? "" : "is-hidden"}`}
+          onClick={() => onToggle(k)}
+          aria-pressed={visible[k]}
+        >
+          <span className={`trend-legend-swatch ${bandClasses[k]}`} />
+          <span className="trend-legend-label">{label}</span>
+          <span className="trend-legend-value">{format(totals[k] || 0)}</span>
+        </button>
+      ))}
     </div>
   );
 }
@@ -361,6 +438,7 @@ function SearchBar({ value, onChange, placeholder, onFocus, onBlur }: { value: s
 function ProjectStatsPanel({ sessions, view, onChangeView }: { sessions: SessionInfo[]; view: 'cost' | 'tokens'; onChangeView: (v: 'cost' | 'tokens') => void }) {
   const totalCost = sessions.reduce((sum, s) => sum + (s.is_authoritative_stats ? s.cost_usd : 0), 0);
   // Sum the four token categories across every session for the Total tile and the toggle gate.
+  // Indexing follows the Rust SessionInfo field order: [input, cache_creation, cache_read, output].
   const tokenTotals = sessions.reduce(
     (acc, s) => {
       acc[0] += s.total_input_tokens || 0;
@@ -372,6 +450,17 @@ function ProjectStatsPanel({ sessions, view, onChangeView }: { sessions: Session
     [0, 0, 0, 0],
   );
   const totalTokens = tokenTotals[0] + tokenTotals[1] + tokenTotals[2] + tokenTotals[3];
+  // Per-band visibility for the tokens chart legend. Click a chip to mute its band — handy
+  // when one category dominates the stack and hides the smaller bands. Reset on session set
+  // changes would surprise users mid-toggle, so it survives across re-renders.
+  const [visibleTokenBands, setVisibleTokenBands] = useState<boolean[]>([true, true, true, true]);
+  const toggleTokenBand = (k: number) => setVisibleTokenBands(prev => {
+    const next = prev.slice();
+    next[k] = !next[k];
+    // If the user just hid the last visible band, restore everything — empty chart is useless.
+    if (!next.some(Boolean)) return prev.map(() => true);
+    return next;
+  });
   // Hide the panel entirely when neither mode has anything to show — same "empty project"
   // feel as before, just generalized.
   if (totalCost <= 0 && totalTokens <= 0) return null;
@@ -415,11 +504,24 @@ function ProjectStatsPanel({ sessions, view, onChangeView }: { sessions: Session
           {effectiveView === 'cost' ? (
             <MetricAreaChart series={dailyCostSeries(sessions, 30)} bandClasses={["trend-band-cost"]} format={formatCost} />
           ) : (
-            <MetricAreaChart
-              series={dailyTokensSeries(sessions, 30)}
-              bandClasses={["trend-band-cache-read", "trend-band-cache-creation", "trend-band-input", "trend-band-output"]}
-              format={formatTokens}
-            />
+            <>
+              <MetricAreaChart
+                series={dailyTokensSeries(sessions, 30)}
+                bandClasses={TOKEN_BAND_CLASSES}
+                bandLabels={TOKEN_BAND_LABELS}
+                visibleBands={visibleTokenBands}
+                format={formatTokens}
+              />
+              <MetricLegend
+                bandLabels={TOKEN_BAND_LABELS}
+                bandClasses={TOKEN_BAND_CLASSES}
+                // Legend totals follow chart order: [cache_read, cache_creation, input, output].
+                totals={[tokenTotals[2], tokenTotals[1], tokenTotals[0], tokenTotals[3]]}
+                visible={visibleTokenBands}
+                onToggle={toggleTokenBand}
+                format={formatTokens}
+              />
+            </>
           )}
         </div>
         <div className="project-stats-tiles">
