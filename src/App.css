@@ -976,6 +976,19 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .project-stats-wrap.collapsed { max-height: 0; opacity: 0; transform: translateY(-8px); padding-top: 0; padding-bottom: 0; }
 .project-stats { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 8px; }
 .project-stats-section-label { font-size: 9px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+/* Inline row for the section label + Cost/Tokens segmented control. The label takes
+   whatever space the toggle leaves; the toggle hugs the right edge of the chart column. */
+.project-stats-section-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.project-stats-section-row .project-stats-section-label { margin-bottom: 0; }
+
+/* Segmented control. Two pill-buttons in a single rounded shell. The active button gets a
+   tinted bg + the text-default color; inactive buttons stay muted so the active one reads
+   as the primary state without needing extra weight. */
+.metric-toggle { display: inline-flex; align-items: center; padding: 2px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-elevated); }
+.metric-toggle-btn { font: inherit; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; padding: 3px 10px; border-radius: 4px; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; transition: background 0.12s, color 0.12s; }
+.metric-toggle-btn:hover:not(:disabled):not(.is-active) { color: var(--text-default); }
+.metric-toggle-btn.is-active { background: var(--bg-deep); color: var(--text-default); }
+.metric-toggle-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .project-stats-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 240px); gap: 24px; align-items: center; }
 .project-stats-chart { display: flex; flex-direction: column; min-width: 0; }
 
@@ -986,6 +999,18 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .trend-chart-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .trend-chart-svg { width: 100%; height: 96px; display: block; cursor: crosshair; }
 .trend-line { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+/* Bands. Single-band cost charts use the parent's currentColor (terracotta) via the gradient
+   fill; multi-band token charts use distinct hues per band so cache_read vs output is legible
+   at a glance. Stacked mode dims the trend-line slightly so it doesn't fight the band colors. */
+.trend-band { fill: url(#metric-area-grad); }
+.trend-band-cost { fill: url(#metric-area-grad); }
+.trend-stacked .trend-line { opacity: 0.4; }
+/* Token bands, bottom→top in cost-impact order: cheapest (cache_read) at the base. Each
+   band paints flat (no per-band gradient) so stacked colors stay readable. */
+.trend-band-cache-read     { fill: color-mix(in oklab, #6c8ea4 70%, transparent); }
+.trend-band-cache-creation { fill: color-mix(in oklab, #7aa2f7 65%, transparent); }
+.trend-band-input          { fill: color-mix(in oklab, var(--accent-coral) 65%, transparent); }
+.trend-band-output         { fill: color-mix(in oklab, var(--accent-terracotta) 80%, transparent); }
 .trend-baseline { stroke: var(--border-subtle); stroke-width: 1; }
 .trend-today-dot { fill: var(--accent-terracotta); stroke: var(--bg-deep); stroke-width: 1.5; }
 .trend-hover line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 2; opacity: 0.5; }

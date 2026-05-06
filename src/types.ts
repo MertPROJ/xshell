@@ -39,6 +39,15 @@ export interface SessionInfo {
   daily_cost: Record<string, number>; // { "YYYY-MM-DD": usd } from the hook; empty when no hook
   rate_limit_5h_pct: number | null;
   rate_limit_7d_pct: number | null;
+  // Lifetime token totals across every non-synthetic assistant turn in the JSONL. Always
+  // populated from the JSONL itself — independent of the xshell-stats hook.
+  total_input_tokens: number;
+  total_cache_creation_tokens: number;
+  total_cache_read_tokens: number;
+  total_output_tokens: number;
+  // Per-day token breakdown keyed by YYYY-MM-DD. Tuple is [input, cache_creation, cache_read,
+  // output] — the four bands the project stats panel stacks in tokens-mode.
+  daily_tokens: Record<string, [number, number, number, number]>;
 }
 
 export interface MessagePreview {
@@ -221,6 +230,7 @@ export interface AppSettings {
   terminalBgColor: string;  // hex, default '#141413'
   alwaysOnTop: boolean;
   defaultShell: string;     // shell id (must match a preset in SHELL_PRESETS)
+  projectStatsView: 'cost' | 'tokens';  // selected metric for the project stats panel
 }
 
 export interface ShellPreset {

@@ -22,6 +22,8 @@ interface HomeViewProps {
   contextTreeEnabled: boolean;
   showSessionRowMetrics: boolean;
   showProjectStatsChart: boolean;
+  projectStatsView: 'cost' | 'tokens';
+  onChangeProjectStatsView: (view: 'cost' | 'tokens') => void;
   onOpenSession: (session: SessionInfo, project?: ProjectInfo) => void;
   onOpenSessionBackground: (session: SessionInfo, project?: ProjectInfo) => void;
   onSelectProject: (project: ProjectInfo) => void;
@@ -98,11 +100,24 @@ function formatCost(usd: number): string {
   return `$${Math.round(usd)}`;
 }
 
+// Compact token count: 1.2M / 50k / 123 — used by the tokens chart, legend, and tooltip.
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+  return `${n}`;
+}
+
+// A point in either a single-band (cost) or multi-band (tokens) series. `values` indexes
+// match the `bandLabels` passed to MetricAreaChart — for cost that's a single $ band, for
+// tokens it's [cache_read, cache_creation, input, output] in cost-impact order so the
+// cheapest band sits visually at the bottom and pricier bands stack above.
+type SeriesPoint = { date: string; values: number[] };
+
 // Aggregate per-day cost across a project's sessions and produce a continuous N-day series
 // (oldest → newest, missing days = 0). The hook only stores days that had spending, so we
 // pad zeros for quiet days — that's what makes the trendline read as a real trend rather
 // than a few disconnected pillars.
-function dailyCostSeries(sessions: SessionInfo[], days: number): { date: string; usd: number }[] {
+function dailyCostSeries(sessions: SessionInfo[], days: number): SeriesPoint[] {
   const byDate = new Map<string, number>();
   for (const s of sessions) {
     if (!s.daily_cost) continue;
@@ -110,14 +125,41 @@ function dailyCostSeries(sessions: SessionInfo[], days: number): { date: string;
       byDate.set(date, (byDate.get(date) || 0) + usd);
     }
   }
-  const out: { date: string; usd: number }[] = [];
+  return paddedSeries(byDate, days, (v) => [v ?? 0]);
+}
+
+// Same shape as dailyCostSeries but with four token bands per day. Source is the JSONL-derived
+// daily_tokens map on each session — independent of the xshell-stats hook, so it works even
+// for users without the hook installed. Reorder Rust's [input, cache_creation, cache_read,
+// output] tuple into [cache_read, cache_creation, input, output] for visual cost-impact order.
+function dailyTokensSeries(sessions: SessionInfo[], days: number): SeriesPoint[] {
+  const byDate = new Map<string, [number, number, number, number]>();
+  for (const s of sessions) {
+    if (!s.daily_tokens) continue;
+    for (const [date, t] of Object.entries(s.daily_tokens)) {
+      const cur = byDate.get(date) || [0, 0, 0, 0];
+      // Rust order: [input, cache_creation, cache_read, output] →
+      // chart order: [cache_read, cache_creation, input, output]
+      cur[0] += t[2] || 0;
+      cur[1] += t[1] || 0;
+      cur[2] += t[0] || 0;
+      cur[3] += t[3] || 0;
+      byDate.set(date, cur);
+    }
+  }
+  return paddedSeries(byDate, days, (v) => v ?? [0, 0, 0, 0]);
+}
+
+// Common pad-with-zeros loop shared by both daily series.
+function paddedSeries<T>(byDate: Map<string, T>, days: number, fill: (v: T | undefined) => number[]): SeriesPoint[] {
+  const out: SeriesPoint[] = [];
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(today);
     d.setUTCDate(today.getUTCDate() - i);
     const key = d.toISOString().slice(0, 10);
-    out.push({ date: key, usd: byDate.get(key) || 0 });
+    out.push({ date: key, values: fill(byDate.get(key)) });
   }
   return out;
 }
@@ -128,28 +170,61 @@ function shortDate(iso: string): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
-// Smooth area+line chart of daily cost — replaces the bar sparkline. Renders three things:
-// the filled area under the polyline, the polyline itself, and a single dot on "today".
-// Hover anywhere over the chart shows a vertical guide + tooltip with the day / amount;
-// the readout in the axis row reflects the same hovered point. SVG uses a viewBox in pixel
-// space so we can lay the path out cleanly, but stretches to fit the parent.
-function CostAreaChart({ series, height = 96 }: { series: { date: string; usd: number }[]; height?: number }) {
+// Smooth area chart for either a single-band metric (cost) or a stacked multi-band metric
+// (tokens). Renders one filled area per band, a polyline along the topmost band, a "today"
+// dot, and a hover crosshair. SVG uses a fixed viewBox in pixel space so path math is clean,
+// but stretches via CSS to fit the parent container.
+//
+// `bandClasses` are SVG-class names per band (bottom→top order), each styled in App.css with
+// its own currentColor / opacity so cache_read reads visually distinct from output.
+function MetricAreaChart({
+  series, bandClasses, format, height = 96,
+}: {
+  series: SeriesPoint[];
+  bandClasses: string[];
+  format: (n: number) => string;
+  height?: number;
+}) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const W = 600; // viewBox width (px); the SVG itself is width:100% via CSS
   const padL = 4, padR = 4, padT = 6, padB = 14;
   const innerW = W - padL - padR;
   const innerH = height - padT - padB;
-  const max = series.reduce((m, p) => Math.max(m, p.usd), 0);
+  const bandCount = bandClasses.length;
+  // Stacked totals (sum of all bands) per point — used for both the y-scale and the trend line.
+  const totals = series.map(p => p.values.reduce((a, b) => a + b, 0));
+  const max = totals.reduce((m, v) => Math.max(m, v), 0);
   const x = (i: number) => series.length <= 1 ? padL + innerW / 2 : padL + (i / (series.length - 1)) * innerW;
   const y = (v: number) => max <= 0 ? padT + innerH : padT + innerH - (v / max) * innerH;
-  // Polyline path through every point — straight segments (cheaper than splines and keeps
-  // spikes legible). Area path closes back along the bottom for the gradient fill.
-  const linePath = series.map((p, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(p.usd).toFixed(1)}`).join(" ");
-  const areaPath = `${linePath} L ${x(series.length - 1).toFixed(1)} ${padT + innerH} L ${x(0).toFixed(1)} ${padT + innerH} Z`;
+
+  // For each point, pre-compute the cumulative sum at each band boundary so band paths
+  // can stack cleanly. cumAt[i][k] is the running total after band k at point i.
+  const cumAt: number[][] = series.map(p => {
+    let acc = 0;
+    return p.values.map(v => (acc += v));
+  });
+  // Path for a single band k: top edge along cumAt[*][k], bottom edge along cumAt[*][k-1]
+  // (or 0 for k=0). Closed shape so the gradient fill clips correctly.
+  const bandPath = (k: number) => {
+    const top: string[] = [];
+    const bot: string[] = [];
+    for (let i = 0; i < series.length; i++) {
+      top.push(`${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(cumAt[i][k]).toFixed(1)}`);
+      const lower = k === 0 ? 0 : cumAt[i][k - 1];
+      bot.push(`L ${x(i).toFixed(1)} ${y(lower).toFixed(1)}`);
+    }
+    bot.reverse();
+    return `${top.join(" ")} ${bot.join(" ")} Z`;
+  };
+
+  // Topmost outline — runs along the total-sum (top of the highest band). This is the line
+  // that visually defines the trend regardless of how many bands are in play.
+  const linePath = series.map((_, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(totals[i]).toFixed(1)}`).join(" ");
+
   const todayIdx = series.length - 1;
-  const hovered = hoverIdx != null ? series[hoverIdx] : null;
-  const total = series.reduce((sum, p) => sum + p.usd, 0);
+  const hovered = hoverIdx != null ? { point: series[hoverIdx], total: totals[hoverIdx] } : null;
+  const grandTotal = totals.reduce((a, b) => a + b, 0);
 
   // Three date ticks: oldest, middle, newest. Skip middle if the range is too short.
   const ticks = series.length >= 3
@@ -165,30 +240,34 @@ function CostAreaChart({ series, height = 96 }: { series: { date: string; usd: n
     setHoverIdx(idx);
   };
 
+  const peak = max;
   return (
     <div className="trend-chart">
       <div className="trend-chart-axis">
-        <span>{hovered ? shortDate(hovered.date) : `Last ${series.length} days`}</span>
-        <span>{hovered ? formatCost(hovered.usd) : `${formatCost(total)} total · peak ${formatCost(max)}`}</span>
+        <span>{hovered ? shortDate(hovered.point.date) : `Last ${series.length} days`}</span>
+        <span>{hovered ? format(hovered.total) : `${format(grandTotal)} total · peak ${format(peak)}`}</span>
       </div>
-      <svg ref={svgRef} className="trend-chart-svg" viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none" onMouseMove={handleMove} onMouseLeave={() => setHoverIdx(null)}>
+      <svg ref={svgRef} className={`trend-chart-svg ${bandCount > 1 ? "trend-stacked" : ""}`} viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none" onMouseMove={handleMove} onMouseLeave={() => setHoverIdx(null)}>
         <defs>
-          <linearGradient id="cost-area-grad" x1="0" x2="0" y1="0" y2="1">
+          <linearGradient id="metric-area-grad" x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="currentColor" stopOpacity="0.45" />
             <stop offset="100%" stopColor="currentColor" stopOpacity="0.02" />
           </linearGradient>
         </defs>
-        {max > 0 && <path d={areaPath} fill="url(#cost-area-grad)" />}
+        {/* One filled path per band, bottom→top. Single-band charts still flow through here. */}
+        {max > 0 && bandClasses.map((cls, k) => (
+          <path key={k} d={bandPath(k)} className={`trend-band ${cls}`} />
+        ))}
         {max > 0 && <path d={linePath} className="trend-line" />}
         {/* baseline */}
         <line x1={padL} x2={W - padR} y1={padT + innerH + 0.5} y2={padT + innerH + 0.5} className="trend-baseline" />
         {/* today dot */}
-        {max > 0 && series[todayIdx].usd > 0 && <circle cx={x(todayIdx)} cy={y(series[todayIdx].usd)} r="3" className="trend-today-dot" />}
+        {max > 0 && totals[todayIdx] > 0 && <circle cx={x(todayIdx)} cy={y(totals[todayIdx])} r="3" className="trend-today-dot" />}
         {/* hover crosshair + dot */}
         {hovered && (
           <g className="trend-hover">
             <line x1={x(hoverIdx!)} x2={x(hoverIdx!)} y1={padT} y2={padT + innerH} />
-            {hovered.usd > 0 && <circle cx={x(hoverIdx!)} cy={y(hovered.usd)} r="3.5" />}
+            {hovered.total > 0 && <circle cx={x(hoverIdx!)} cy={y(hovered.total)} r="3.5" />}
           </g>
         )}
       </svg>
@@ -275,24 +354,85 @@ function SearchBar({ value, onChange, placeholder, onFocus, onBlur }: { value: s
   );
 }
 
-// Replaces the old "Continue where you left" cards with a slim stats overview: a daily-cost
-// area chart on the left, and two tiles on the right (Total + Messages). Only renders when
-// there's authoritative cost data — sessions without the hook contribute nothing to chart.
-function ProjectStatsPanel({ sessions }: { sessions: SessionInfo[] }) {
-  const series30 = dailyCostSeries(sessions, 30);
+// Replaces the old "Continue where you left" cards with a slim stats overview: a daily area
+// chart on the left, and two tiles on the right (Total + Messages). The chart + total tile
+// switch between Cost and Tokens via the segmented control. Cost mode is gated on hook data;
+// Tokens mode is JSONL-only so it works without the xshell-stats hook.
+function ProjectStatsPanel({ sessions, view, onChangeView }: { sessions: SessionInfo[]; view: 'cost' | 'tokens'; onChangeView: (v: 'cost' | 'tokens') => void }) {
   const totalCost = sessions.reduce((sum, s) => sum + (s.is_authoritative_stats ? s.cost_usd : 0), 0);
-  if (totalCost <= 0) return null;
+  // Sum the four token categories across every session for the Total tile and the toggle gate.
+  const tokenTotals = sessions.reduce(
+    (acc, s) => {
+      acc[0] += s.total_input_tokens || 0;
+      acc[1] += s.total_cache_creation_tokens || 0;
+      acc[2] += s.total_cache_read_tokens || 0;
+      acc[3] += s.total_output_tokens || 0;
+      return acc;
+    },
+    [0, 0, 0, 0],
+  );
+  const totalTokens = tokenTotals[0] + tokenTotals[1] + tokenTotals[2] + tokenTotals[3];
+  // Hide the panel entirely when neither mode has anything to show — same "empty project"
+  // feel as before, just generalized.
+  if (totalCost <= 0 && totalTokens <= 0) return null;
+
   const totalMessages = sessions.reduce((sum, s) => sum + (s.message_count || 0), 0);
+
+  // The segmented control: only enable a mode when its data exists. If the user has no hook
+  // at all we lock onto Tokens; if a session is too new for the JSONL to have any usage we
+  // fall back to Cost.
+  const costAvailable = totalCost > 0;
+  const tokensAvailable = totalTokens > 0;
+  const effectiveView: 'cost' | 'tokens' = view === 'cost' && !costAvailable ? 'tokens'
+    : view === 'tokens' && !tokensAvailable ? 'cost'
+    : view;
 
   return (
     <div className="project-stats">
       <div className="project-stats-row">
         <div className="project-stats-chart">
-          <div className="project-stats-section-label">Daily cost · last 30 days</div>
-          <CostAreaChart series={series30} />
+          <div className="project-stats-section-row">
+            <div className="project-stats-section-label">
+              {effectiveView === 'cost' ? 'Daily cost · last 30 days' : 'Daily tokens · last 30 days'}
+            </div>
+            <div className="metric-toggle" role="tablist" aria-label="Stats metric">
+              <button
+                role="tab"
+                aria-selected={effectiveView === 'cost'}
+                className={`metric-toggle-btn ${effectiveView === 'cost' ? 'is-active' : ''}`}
+                disabled={!costAvailable}
+                onClick={() => onChangeView('cost')}
+              >Cost</button>
+              <button
+                role="tab"
+                aria-selected={effectiveView === 'tokens'}
+                className={`metric-toggle-btn ${effectiveView === 'tokens' ? 'is-active' : ''}`}
+                disabled={!tokensAvailable}
+                onClick={() => onChangeView('tokens')}
+              >Tokens</button>
+            </div>
+          </div>
+          {effectiveView === 'cost' ? (
+            <MetricAreaChart series={dailyCostSeries(sessions, 30)} bandClasses={["trend-band-cost"]} format={formatCost} />
+          ) : (
+            <MetricAreaChart
+              series={dailyTokensSeries(sessions, 30)}
+              bandClasses={["trend-band-cache-read", "trend-band-cache-creation", "trend-band-input", "trend-band-output"]}
+              format={formatTokens}
+            />
+          )}
         </div>
         <div className="project-stats-tiles">
-          <Tile label="Total" value={formatCost(totalCost)} sub={`across ${sessions.length} session${sessions.length === 1 ? "" : "s"}`} accent="success" />
+          {effectiveView === 'cost' ? (
+            <Tile label="Total" value={formatCost(totalCost)} sub={`across ${sessions.length} session${sessions.length === 1 ? "" : "s"}`} accent="success" />
+          ) : (
+            <Tile
+              label="Total"
+              value={formatTokens(totalTokens)}
+              sub={`${Math.round((tokenTotals[2] / Math.max(1, totalTokens)) * 100)}% cache read`}
+              accent="success"
+            />
+          )}
           <Tile label="Messages" value={totalMessages.toLocaleString()} sub="user prompts" />
         </div>
       </div>
@@ -330,7 +470,7 @@ function filterSessions(sessions: SessionInfo[], query: string): SessionInfo[] {
   return sessions.filter(s => s.title.toLowerCase().includes(q) || s.project_name.toLowerCase().includes(q) || s.git_branch.toLowerCase().includes(q));
 }
 
-export function HomeView({ projects, selectedProject, projectIcons, recentSessions, projectSessions, openSessionIds, sessionGroupName, loading, sessionsLoading, contextTreeEnabled, showSessionRowMetrics, showProjectStatsChart, onOpenSession, onOpenSessionBackground, onSelectProject, onNewChat, onAddProject, onRemoveProject, onEditProject, onSaveFolders }: HomeViewProps) {
+export function HomeView({ projects, selectedProject, projectIcons, recentSessions, projectSessions, openSessionIds, sessionGroupName, loading, sessionsLoading, contextTreeEnabled, showSessionRowMetrics, showProjectStatsChart, projectStatsView, onChangeProjectStatsView, onOpenSession, onOpenSessionBackground, onSelectProject, onNewChat, onAddProject, onRemoveProject, onEditProject, onSaveFolders }: HomeViewProps) {
   const [search, setSearch] = useState("");
   // Scroll-driven collapse of the stats strip in the project detail view. Same UX the old
   // preview cards had: scroll down → strip slides up out of view; pull back up at the very
@@ -497,9 +637,15 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
 
     // When searching we flatten — folders are a long-term organization tool, not a filter layer.
     const isSearching = search.trim().length > 0;
-    // The stats panel renders only when at least one session has authoritative cost data;
-    // mirror that check here so the "Show stats" chip is gated the same way.
-    const hasStats = projectSessions.some(s => s.is_authoritative_stats && s.cost_usd > 0);
+    // The stats panel renders when at least one session has either authoritative cost data
+    // (hook installed) or any non-zero JSONL token totals — mirror the panel's own gate so
+    // the "Show stats" chip stays in sync with whether the panel actually has anything.
+    // Also respect the user-level showProjectStatsChart toggle so the chip stays hidden
+    // when the user has disabled the panel entirely from settings.
+    const hasStats = projectSessions.some(s =>
+      (s.is_authoritative_stats && s.cost_usd > 0) ||
+      ((s.total_input_tokens || 0) + (s.total_cache_creation_tokens || 0) + (s.total_cache_read_tokens || 0) + (s.total_output_tokens || 0)) > 0
+    );
     const showChip = statsCollapsed && !isSearching && hasStats && showProjectStatsChart;
     return (
       <div className="view-fixed fade-in project-detail-split">
@@ -530,7 +676,7 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
           <div className="project-detail-scroll" ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel}>
             {!isSearching && showProjectStatsChart && (
               <div className={`project-stats-wrap ${statsCollapsed ? "collapsed" : ""}`}>
-                <ProjectStatsPanel sessions={projectSessions} />
+                <ProjectStatsPanel sessions={projectSessions} view={projectStatsView} onChangeView={onChangeProjectStatsView} />
               </div>
             )}
 
