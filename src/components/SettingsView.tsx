@@ -35,6 +35,8 @@ interface SettingsViewProps {
   onSetFullscreenRendering: (enabled: boolean) => void;
   forceSyncOutput: boolean;
   onSetForceSyncOutput: (enabled: boolean) => void;
+  eagerInitTabs: boolean;
+  onSetEagerInitTabs: (enabled: boolean) => void;
   showRateLimitInSidebar: boolean;
   onSetShowRateLimitInSidebar: (enabled: boolean) => void;
   showSessionRowMetrics: boolean;
@@ -119,7 +121,7 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
@@ -253,6 +255,12 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                 </SettingRow>
                 <SettingRow title="Force synchronized output" description="Tells Claude Code to wrap each TUI frame in DEC 2026 synchronized-output markers, so xterm.js renders only complete frames — fixes the 'flying letters' residue from half-drawn redraws. Sets CLAUDE_CODE_FORCE_SYNC_OUTPUT=1 on each new claude session. Introduced in Claude Code 2.1.129 (May 6, 2026).">
                   <Toggle checked={forceSyncOutput} onChange={onSetForceSyncOutput} />
+                </SettingRow>
+              </Section>
+
+              <Section title="Startup" description="What happens to your saved tabs when xshell launches.">
+                <SettingRow title="Pre-initialize tabs on launch" description="Spawn each restored tab's session immediately at app start, instead of deferring until you click into the tab. Claude takes a few seconds to boot, so eager init means the session is ready (or close to it) by the time you switch to it. Open a tab whose session is still booting and the 'Starting Claude…' spinner shows until the first frame renders.">
+                  <Toggle checked={eagerInitTabs} onChange={onSetEagerInitTabs} />
                 </SettingRow>
               </Section>
 
