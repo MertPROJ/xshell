@@ -1,6 +1,6 @@
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -191,6 +191,12 @@ fn parse_session(path: &std::path::Path, project_name: &str, project_path: &str)
     // Per-day breakdown keyed by YYYY-MM-DD. Each value is [input, cache_creation, cache_read,
     // output] so the UI can render a stacked area chart (cost-impact ordering at render time).
     let mut daily_tokens: std::collections::BTreeMap<String, [u64; 4]> = std::collections::BTreeMap::new();
+    // Claude Code splits one assistant API response into multiple JSONL lines — one per content
+    // block (text / thinking / tool_use) — but stamps the SAME `usage` block on every line.
+    // Summing usage on every line over-counts the same API call N times. Dedup by `message.id`
+    // so each real API call contributes its tokens exactly once. Only gates the lifetime totals
+    // and per-day buckets — the "latest" / "max" trackers are idempotent under duplicates.
+    let mut seen_message_ids: HashSet<String> = HashSet::new();
 
     for line in reader.lines().flatten() {
         let json: serde_json::Value = match serde_json::from_str(&line) {
@@ -281,21 +287,30 @@ fn parse_session(path: &std::path::Path, project_name: &str, project_path: &str)
                         last_cache_read = cr;
                         let turn_context = inp + cc + cr;
                         if turn_context > max_context_observed { max_context_observed = turn_context; }
-                        // Lifetime totals — summed across every real assistant turn.
-                        total_input_tokens += inp;
-                        total_cache_creation_tokens += cc;
-                        total_cache_read_tokens += cr;
-                        total_output_tokens += out;
-                        // Per-day bucket. Use this turn's own ISO timestamp (top-level) so days
-                        // line up with when usage actually happened, not when the session ended.
-                        if let Some(ts) = json.get("timestamp").and_then(|v| v.as_str()) {
-                            if ts.len() >= 10 {
-                                let day = ts[..10].to_string();
-                                let entry = daily_tokens.entry(day).or_insert([0; 4]);
-                                entry[0] = entry[0].saturating_add(inp);
-                                entry[1] = entry[1].saturating_add(cc);
-                                entry[2] = entry[2].saturating_add(cr);
-                                entry[3] = entry[3].saturating_add(out);
+                        // Skip the lifetime/per-day accumulation if we've already seen this
+                        // message.id — see `seen_message_ids` declaration above for why.
+                        let message_id = msg.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        let first_seen = match &message_id {
+                            Some(id) => seen_message_ids.insert(id.clone()),
+                            None => true,
+                        };
+                        if first_seen {
+                            total_input_tokens += inp;
+                            total_cache_creation_tokens += cc;
+                            total_cache_read_tokens += cr;
+                            total_output_tokens += out;
+                            // Per-day bucket. Use this turn's own ISO timestamp (top-level) so
+                            // days line up with when usage actually happened, not when the
+                            // session ended.
+                            if let Some(ts) = json.get("timestamp").and_then(|v| v.as_str()) {
+                                if ts.len() >= 10 {
+                                    let day = ts[..10].to_string();
+                                    let entry = daily_tokens.entry(day).or_insert([0; 4]);
+                                    entry[0] = entry[0].saturating_add(inp);
+                                    entry[1] = entry[1].saturating_add(cc);
+                                    entry[2] = entry[2].saturating_add(cr);
+                                    entry[3] = entry[3].saturating_add(out);
+                                }
                             }
                         }
                     }
