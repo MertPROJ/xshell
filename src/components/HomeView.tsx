@@ -433,9 +433,10 @@ function SearchBar({ value, onChange, placeholder, onFocus, onBlur }: { value: s
 
 // Replaces the old "Continue where you left" cards with a slim stats overview: a daily area
 // chart on the left, and two tiles on the right (Total + Messages). The chart + total tile
-// switch between Cost and Tokens via the segmented control. Cost mode is gated on hook data;
-// Tokens mode is JSONL-only so it works without the xshell-stats hook.
-function ProjectStatsPanel({ sessions, view, onChangeView }: { sessions: SessionInfo[]; view: 'cost' | 'tokens'; onChangeView: (v: 'cost' | 'tokens') => void }) {
+// switch between Cost and Tokens via the segmented control. Cost mode is double-gated (hook
+// data + the "Cost chart on project page" setting); Tokens mode is JSONL-only and always
+// available when the project has any usage.
+function ProjectStatsPanel({ sessions, view, onChangeView, costAllowed, tt }: { sessions: SessionInfo[]; view: 'cost' | 'tokens'; onChangeView: (v: 'cost' | 'tokens') => void; costAllowed: boolean; tt?: TtFns }) {
   const totalCost = sessions.reduce((sum, s) => sum + (s.is_authoritative_stats ? s.cost_usd : 0), 0);
   // Sum the four token categories across every session for the Total tile and the toggle gate.
   // Indexing follows the Rust SessionInfo field order: [input, cache_creation, cache_read, output].
@@ -461,17 +462,27 @@ function ProjectStatsPanel({ sessions, view, onChangeView }: { sessions: Session
     if (!next.some(Boolean)) return prev.map(() => true);
     return next;
   });
-  // Hide the panel entirely when neither mode has anything to show — same "empty project"
-  // feel as before, just generalized.
-  if (totalCost <= 0 && totalTokens <= 0) return null;
+  // Cost mode is double-gated: needs both authoritative hook data AND the user-level setting.
+  // Tokens mode just needs JSONL usage. Hide the panel entirely when neither has anything.
+  const costAvailable = totalCost > 0 && costAllowed;
+  const tokensAvailable = totalTokens > 0;
+  if (!costAvailable && !tokensAvailable) return null;
 
   const totalMessages = sessions.reduce((sum, s) => sum + (s.message_count || 0), 0);
 
-  // The segmented control: only enable a mode when its data exists. If the user has no hook
-  // at all we lock onto Tokens; if a session is too new for the JSONL to have any usage we
-  // fall back to Cost.
-  const costAvailable = totalCost > 0;
-  const tokensAvailable = totalTokens > 0;
+  // Reason the Cost button is disabled — surfaced as a tooltip so the user knows what to
+  // change to unlock it. We can tell the three causes apart from session data + the costAllowed
+  // prop: if no session has hook data the user hasn't connected, otherwise it's either the
+  // setting being off or just no recorded cost yet.
+  const hasAuthoritativeData = sessions.some(s => s.is_authoritative_stats);
+  const costDisabledReason = !costAvailable
+    ? !hasAuthoritativeData
+      ? "Connect Claude Code in Settings → Connect"
+      : !costAllowed
+        ? "Enable “Cost chart on project page” in Settings → Connect"
+        : "No recorded cost yet for this project"
+    : null;
+
   const effectiveView: 'cost' | 'tokens' = view === 'cost' && !costAvailable ? 'tokens'
     : view === 'tokens' && !tokensAvailable ? 'cost'
     : view;
@@ -485,13 +496,22 @@ function ProjectStatsPanel({ sessions, view, onChangeView }: { sessions: Session
               {effectiveView === 'cost' ? 'Daily cost · last 30 days' : 'Daily tokens · last 30 days'}
             </div>
             <div className="metric-toggle" role="tablist" aria-label="Stats metric">
-              <button
-                role="tab"
-                aria-selected={effectiveView === 'cost'}
-                className={`metric-toggle-btn ${effectiveView === 'cost' ? 'is-active' : ''}`}
-                disabled={!costAvailable}
-                onClick={() => onChangeView('cost')}
-              >Cost</button>
+              {/* Wrap the disabled Cost button in a span — disabled buttons swallow mouse
+                  events on most browsers, so the tooltip would never fire from the button
+                  itself. The span captures hover and forwards the disabled-reason text. */}
+              <span
+                className="metric-toggle-btn-wrap"
+                onMouseEnter={(e) => costDisabledReason && tt?.showTt(costDisabledReason, e.currentTarget)}
+                onMouseLeave={() => tt?.hideTt()}
+              >
+                <button
+                  role="tab"
+                  aria-selected={effectiveView === 'cost'}
+                  className={`metric-toggle-btn ${effectiveView === 'cost' ? 'is-active' : ''}`}
+                  disabled={!costAvailable}
+                  onClick={() => onChangeView('cost')}
+                >Cost</button>
+              </span>
               <button
                 role="tab"
                 aria-selected={effectiveView === 'tokens'}
@@ -739,16 +759,14 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
 
     // When searching we flatten — folders are a long-term organization tool, not a filter layer.
     const isSearching = search.trim().length > 0;
-    // The stats panel renders when at least one session has either authoritative cost data
-    // (hook installed) or any non-zero JSONL token totals — mirror the panel's own gate so
-    // the "Show stats" chip stays in sync with whether the panel actually has anything.
-    // Also respect the user-level showProjectStatsChart toggle so the chip stays hidden
-    // when the user has disabled the panel entirely from settings.
-    const hasStats = projectSessions.some(s =>
-      (s.is_authoritative_stats && s.cost_usd > 0) ||
-      ((s.total_input_tokens || 0) + (s.total_cache_creation_tokens || 0) + (s.total_cache_read_tokens || 0) + (s.total_output_tokens || 0)) > 0
-    );
-    const showChip = statsCollapsed && !isSearching && hasStats && showProjectStatsChart;
+    // Mirror ProjectStatsPanel's own render gate: tokens always show when the JSONL has
+    // usage; cost only counts when the user-level "Cost chart on project page" setting is
+    // on. Keeps the "Project stats" chip in sync with whether the panel will actually render.
+    const hasStats = projectSessions.some(s => {
+      const tokens = (s.total_input_tokens || 0) + (s.total_cache_creation_tokens || 0) + (s.total_cache_read_tokens || 0) + (s.total_output_tokens || 0);
+      return tokens > 0 || (showProjectStatsChart && s.is_authoritative_stats && s.cost_usd > 0);
+    });
+    const showChip = statsCollapsed && !isSearching && hasStats;
     return (
       <div className="view-fixed fade-in project-detail-split">
         <div className="project-detail-main">
@@ -776,9 +794,9 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
           </div>
 
           <div className="project-detail-scroll" ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel}>
-            {!isSearching && showProjectStatsChart && (
+            {!isSearching && hasStats && (
               <div className={`project-stats-wrap ${statsCollapsed ? "collapsed" : ""}`}>
-                <ProjectStatsPanel sessions={projectSessions} view={projectStatsView} onChangeView={onChangeProjectStatsView} />
+                <ProjectStatsPanel sessions={projectSessions} view={projectStatsView} onChangeView={onChangeProjectStatsView} costAllowed={showProjectStatsChart} tt={tt} />
               </div>
             )}
 

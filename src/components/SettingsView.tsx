@@ -173,7 +173,7 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                 <SettingRow title="Cost & context in terminal header" description={statslineConfigured ? "Replace the project path above each Claude terminal with a live progress bar of context usage and total session cost. Falls back to the path automatically for sessions that don't yet have stats data." : "Connect to Claude Code above to enable this — without the hook there's no live cost or context to render."}>
                   <Toggle checked={showTerminalHeaderStats} onChange={onSetShowTerminalHeaderStats} disabled={!statslineConfigured} />
                 </SettingRow>
-                <SettingRow title="Stats chart on project page" description={statslineConfigured ? "Show the daily-cost area chart and totals tile above the session list when a project is selected. Hides automatically for projects with no recorded cost." : "Connect to Claude Code above to enable this — the chart series comes from the live data feed."}>
+                <SettingRow title="Cost chart on project page" description={statslineConfigured ? "Include the daily-cost view in the project stats panel. The Tokens view is always available — this only controls Cost. Hides automatically for projects with no recorded cost." : "Connect to Claude Code above to enable this — cost data comes from the live data feed. The Tokens view stays available regardless."}>
                   <Toggle checked={showProjectStatsChart} onChange={onSetShowProjectStatsChart} disabled={!statslineConfigured} />
                 </SettingRow>
               </Section>
