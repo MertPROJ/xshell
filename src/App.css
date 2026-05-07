@@ -993,7 +993,25 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .project-stats-wrap.collapsed { max-height: 0; opacity: 0; transform: translateY(-8px); padding-top: 0; padding-bottom: 0; }
 .project-stats { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 8px; }
 .project-stats-section-label { font-size: 9px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
-.project-stats-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 240px); gap: 24px; align-items: center; }
+/* Inline row for the section label + Cost/Tokens segmented control. The label takes
+   whatever space the toggle leaves; the toggle hugs the right edge of the chart column. */
+.project-stats-section-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.project-stats-section-row .project-stats-section-label { margin-bottom: 0; }
+
+/* Segmented control. Two pill-buttons in a single rounded shell. The active button gets a
+   tinted bg + the text-default color; inactive buttons stay muted so the active one reads
+   as the primary state without needing extra weight. */
+.metric-toggle { display: inline-flex; align-items: center; padding: 2px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-elevated); }
+.metric-toggle-btn { font: inherit; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; padding: 3px 10px; border-radius: 4px; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; transition: background 0.12s, color 0.12s; }
+.metric-toggle-btn:hover:not(:disabled):not(.is-active) { color: var(--text-default); }
+.metric-toggle-btn.is-active { background: var(--bg-deep); color: var(--text-default); }
+.metric-toggle-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Wrapper around the Cost button so it can capture hover when disabled (disabled <button>
+   elements don't fire mouse events on most browsers). Inline-flex keeps it sized to the
+   button so the segmented-control layout is unchanged. */
+.metric-toggle-btn-wrap { display: inline-flex; }
+.metric-toggle-btn-wrap:has(.metric-toggle-btn:disabled) { cursor: help; }
+.project-stats-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 240px); gap: 24px; align-items: start; }
 .project-stats-chart { display: flex; flex-direction: column; min-width: 0; }
 
 /* Area chart. `.trend-chart` is the column wrapper holding a header row, the SVG, and a
@@ -1003,6 +1021,69 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .trend-chart-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .trend-chart-svg { width: 100%; height: 96px; display: block; cursor: crosshair; }
 .trend-line { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+/* Bands. Single-band cost charts use the parent's currentColor (terracotta) via the gradient
+   fill; multi-band token charts use distinct hues per band so cache_read vs output is legible
+   at a glance. Stacked mode dims the trend-line slightly so it doesn't fight the band colors. */
+.trend-band { fill: url(#metric-area-grad); }
+.trend-band-cost { fill: url(#metric-area-grad); }
+.trend-stacked .trend-line { opacity: 0.4; }
+/* Token bands, bottom→top in cost-impact order: cheapest (cache_read) at the base. Each
+   band paints flat (no per-band gradient) so stacked colors stay readable. */
+.trend-band-cache-read     { fill: color-mix(in oklab, #6c8ea4 70%, transparent); }
+.trend-band-cache-creation { fill: color-mix(in oklab, #7aa2f7 65%, transparent); }
+.trend-band-input          { fill: color-mix(in oklab, var(--accent-coral) 65%, transparent); }
+.trend-band-output         { fill: color-mix(in oklab, var(--accent-terracotta) 80%, transparent); }
+
+/* Stage wraps the SVG so the absolutely-positioned hover tooltip can be anchored to the
+   chart's coordinate space without affecting axis/ticks layout above and below. */
+.trend-chart-stage { position: relative; }
+
+/* Hover tooltip — multi-band only. Anchored to the hover x-position via a percentage left
+   (or right, when flipped). Pointer-events:none so it never steals hover from the SVG. */
+.trend-tooltip {
+  position: absolute; top: 0; pointer-events: none;
+  min-width: 140px; padding: 6px 8px; border-radius: 6px;
+  background: var(--bg-deep); border: 1px solid var(--border-subtle);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  font-size: 10px; line-height: 1.4; color: var(--text-default);
+  font-variant-numeric: tabular-nums;
+  z-index: 2;
+}
+.trend-tooltip-date { font-weight: 600; font-size: 9px; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
+.trend-tooltip-row { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 6px; }
+.trend-tooltip-swatch { width: 8px; height: 8px; border-radius: 2px; }
+.trend-tooltip-label { color: var(--text-default); }
+.trend-tooltip-value { color: var(--text-muted); }
+.trend-tooltip-total { margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--border-subtle); grid-template-columns: 1fr auto; }
+.trend-tooltip-total .trend-tooltip-label,
+.trend-tooltip-total .trend-tooltip-value { color: var(--text-default); font-weight: 600; }
+/* Swatches reuse the same fill rules as the SVG bands so colors stay in sync. */
+.trend-tooltip-swatch.trend-band-cache-read,
+.trend-legend-swatch.trend-band-cache-read     { background: color-mix(in oklab, #6c8ea4 70%, transparent); }
+.trend-tooltip-swatch.trend-band-cache-creation,
+.trend-legend-swatch.trend-band-cache-creation { background: color-mix(in oklab, #7aa2f7 65%, transparent); }
+.trend-tooltip-swatch.trend-band-input,
+.trend-legend-swatch.trend-band-input          { background: color-mix(in oklab, var(--accent-coral) 65%, transparent); }
+.trend-tooltip-swatch.trend-band-output,
+.trend-legend-swatch.trend-band-output         { background: color-mix(in oklab, var(--accent-terracotta) 80%, transparent); }
+
+/* Legend below the tokens chart. Each chip is a full button: swatch · label · per-band
+   total. Click to mute that band — the chip dims and the swatch goes hollow so the muted
+   state is obvious at a glance. */
+.trend-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.trend-legend-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px; border-radius: 999px;
+  background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+  font: inherit; font-size: 10px; color: var(--text-default);
+  cursor: pointer; transition: opacity 0.12s, background 0.12s;
+}
+.trend-legend-chip:hover { background: var(--bg-deep); }
+.trend-legend-chip.is-hidden { opacity: 0.4; }
+.trend-legend-chip.is-hidden .trend-legend-swatch { background: transparent !important; box-shadow: inset 0 0 0 1px var(--text-muted); }
+.trend-legend-swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.trend-legend-label { font-weight: 500; }
+.trend-legend-value { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .trend-baseline { stroke: var(--border-subtle); stroke-width: 1; }
 .trend-today-dot { fill: var(--accent-terracotta); stroke: var(--bg-deep); stroke-width: 1.5; }
 .trend-hover line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 2; opacity: 0.5; }
@@ -1012,7 +1093,7 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .trend-chart-ticks span:first-child { transform: translateX(0); }
 .trend-chart-ticks span:last-child { transform: translateX(-100%); }
 
-.project-stats-tiles { display: flex; flex-direction: column; gap: 10px; align-self: stretch; justify-content: center; }
+.project-stats-tiles { display: flex; flex-direction: column; gap: 10px; }
 .project-stats-tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .project-stats-tile-label { font-size: 9px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-muted); }
 .project-stats-tile-value { font-size: 22px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1.1; }

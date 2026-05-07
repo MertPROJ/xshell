@@ -121,6 +121,9 @@ export default function App() {
   // overlay still shows if the user gets there before the first byte of output.
   const [eagerInitTabs, setEagerInitTabs] = useState(true);
   const [defaultShell, setDefaultShell] = useState<string>(getDefaultShellId());
+  // Cost vs Tokens for the per-project stats panel. Global, not per-project — reflects what
+  // the user cares about generally, not a trait of any one project.
+  const [projectStatsView, setProjectStatsView] = useState<'cost' | 'tokens'>('cost');
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [editingProjectPath, setEditingProjectPath] = useState<string | null>(null);
@@ -146,7 +149,7 @@ export default function App() {
     (async () => {
       try {
         const store = await load("settings.json", { defaults: {}, autoSave: true });
-        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender, termHeaderStats, projectStatsChart, syncOut, eagerInit] = await Promise.all([
+        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender, termHeaderStats, projectStatsChart, statsView, syncOut, eagerInit] = await Promise.all([
           store.get<string[]>("project_paths"),
           store.get<Record<string, ProjectSettings>>("project_icons"),
           store.get<Tab[]>("open_tabs"),
@@ -165,6 +168,7 @@ export default function App() {
           store.get<boolean>("fullscreen_rendering_enabled"),
           store.get<boolean>("terminal_header_stats"),
           store.get<boolean>("project_stats_chart"),
+          store.get<'cost' | 'tokens'>("project_stats_view"),
           store.get<boolean>("force_sync_output_enabled"),
           store.get<boolean>("eager_init_tabs"),
         ]);
@@ -197,6 +201,7 @@ export default function App() {
         if (typeof termHeaderStats === "boolean") setShowTerminalHeaderStats(termHeaderStats);
         if (typeof projectStatsChart === "boolean") setShowProjectStatsChart(projectStatsChart);
         if (storedTheme === "light" || storedTheme === "dark") setTheme(storedTheme);
+        if (statsView === "cost" || statsView === "tokens") setProjectStatsView(statsView);
         // Restore only tabs that have a real sessionId (not abandoned "New Chat" tabs)
         if (savedTabs?.length) {
           const restorable = savedTabs.filter(t => t.sessionId && t.projectPath);
@@ -420,6 +425,11 @@ export default function App() {
   const persistFullscreenRendering = useCallback(async (enabled: boolean) => {
     setFullscreenRendering(enabled);
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("fullscreen_rendering_enabled", enabled); } catch (_) {}
+  }, []);
+
+  const persistProjectStatsView = useCallback(async (view: 'cost' | 'tokens') => {
+    setProjectStatsView(view);
+    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("project_stats_view", view); } catch (_) {}
   }, []);
 
   const persistForceSyncOutput = useCallback(async (enabled: boolean) => {
@@ -994,7 +1004,7 @@ export default function App() {
               }
             }
             return map;
-          })()} loading={initialLoading} sessionsLoading={sessionsLoading} onOpenSession={handleOpenSession} onOpenSessionBackground={handleOpenSessionBackground} onSelectProject={handleSelectProject} onNewChat={handleNewChat} onAddProject={() => setShowProjectPicker(true)} onRemoveProject={handleRemoveProject} onEditProject={(p) => setEditingProjectPath(p)} onSaveFolders={handleSaveFolders} />
+          })()} loading={initialLoading} sessionsLoading={sessionsLoading} projectStatsView={projectStatsView} onChangeProjectStatsView={persistProjectStatsView} onOpenSession={handleOpenSession} onOpenSessionBackground={handleOpenSessionBackground} onSelectProject={handleSelectProject} onNewChat={handleNewChat} onAddProject={() => setShowProjectPicker(true)} onRemoveProject={handleRemoveProject} onEditProject={(p) => setEditingProjectPath(p)} onSaveFolders={handleSaveFolders} />
         </div>
         {/* Work area — shows the active entry (either a single tab or a group's split layout).
             Terminal DOM hosts (created imperatively below) are physically reparented into
