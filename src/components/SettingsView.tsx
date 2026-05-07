@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Paintbrush, Terminal as TerminalIcon, Settings as SettingsIcon, RotateCcw, Sparkles, Info, ExternalLink, RefreshCw, CheckCircle2 } from "lucide-react";
+import { Paintbrush, Terminal as TerminalIcon, Settings as SettingsIcon, RotateCcw, Sparkles, Info, ExternalLink, RefreshCw, CheckCircle2, ChevronRight, Download, AlertTriangle, Loader2 } from "lucide-react";
 import { getAvailableShells } from "../shells";
 import { ShellIcon } from "./ShellIcon";
 import { useTooltip, ttProps } from "./Tooltip";
 import { DetailedSessionInfoWizard } from "./DetailedSessionInfoWizard";
 import { DARK_TERM_BG, LIGHT_TERM_BG } from "./TerminalTab";
-import type { UpdateInfo } from "../hooks/useUpdateCheck";
+import type { UpdateInfo, ReleaseEntry } from "../hooks/useUpdateCheck";
+import { useInstaller } from "../hooks/useInstaller";
 import { renderMarkdown } from "../markdown";
 import { detectInstallCommand } from "../installCommand";
 import { CodeCopy } from "./CodeCopy";
@@ -32,6 +33,10 @@ interface SettingsViewProps {
   onSetDefaultShell: (shellId: string) => void;
   fullscreenRendering: boolean;
   onSetFullscreenRendering: (enabled: boolean) => void;
+  forceSyncOutput: boolean;
+  onSetForceSyncOutput: (enabled: boolean) => void;
+  eagerInitTabs: boolean;
+  onSetEagerInitTabs: (enabled: boolean) => void;
   showRateLimitInSidebar: boolean;
   onSetShowRateLimitInSidebar: (enabled: boolean) => void;
   showSessionRowMetrics: boolean;
@@ -53,6 +58,33 @@ const CATEGORIES: { id: Category; label: string; icon: React.ComponentType<{ siz
   { id: "about",      label: "About",      icon: Info },
 ];
 
+
+// Collapsible changelog row — version + date as the header, markdown-rendered notes when
+// expanded. The currently-installed version is marked so users can see at a glance which entry
+// they're running.
+function ChangelogRow({ entry, currentVersion }: { entry: ReleaseEntry; currentVersion: string }) {
+  const [open, setOpen] = useState(false);
+  const isCurrent = !!currentVersion && entry.version === currentVersion;
+  const dateLabel = entry.publishedAt ? new Date(entry.publishedAt).toLocaleDateString() : null;
+  return (
+    <div className={`settings-changelog-row ${open ? "is-open" : ""}`}>
+      <button className="settings-changelog-toggle" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+        <ChevronRight size={12} className="settings-changelog-chevron" />
+        <span className="settings-changelog-version">v{entry.version}</span>
+        {isCurrent && <span className="settings-version-chip settings-version-chip-ok">Installed</span>}
+        {dateLabel && <span className="settings-changelog-date">{dateLabel}</span>}
+      </button>
+      {open && (
+        <div className="settings-changelog-body md-content">
+          {entry.notes.trim() ? renderMarkdown(entry.notes) : <span className="settings-version-muted">No release notes.</span>}
+          {entry.url && (
+            <button className="btn btn-ghost settings-changelog-link" onClick={() => invoke("open_url", { url: entry.url }).catch(() => {})}><ExternalLink size={11} /> View on GitHub</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
@@ -89,13 +121,14 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
   // metrics toggles — there's no point letting users enable features that have no data
   // source. We re-probe whenever the wizard closes (in case they just installed the hook).
   const [statslineConfigured, setStatslineConfigured] = useState(false);
+  const installer = useInstaller();
   const shells = getAvailableShells();
   const { tt, Tooltip } = useTooltip();
 
@@ -216,9 +249,18 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                 </SettingRow>
               </Section>
 
-              <Section title="Claude Code" description="Tweaks applied to every Claude session launched from xshell.">
-                <SettingRow title="Full screen rendering" description="Switch Claude Code into the alternate-screen-buffer renderer (no scrollback, no flicker on every refresh). Sets CLAUDE_CODE_NO_FLICKER=1 on each new claude session — open sessions keep their current mode until next launch.">
+              <Section title="Claude Code" description="Tweaks applied to every Claude session launched from xshell. Both toggles below are highly recommended to keep ON — they fix rendering issues that are specific to running Claude Code inside an xterm.js host.">
+                <SettingRow title="Full screen rendering" description="Switch Claude Code into the alternate-screen-buffer renderer (no scrollback, no flicker on every refresh). Sets CLAUDE_CODE_NO_FLICKER=1 on each new claude session — open sessions keep their current mode until next launch. Introduced in Claude Code 2.1.89 (April 1, 2026).">
                   <Toggle checked={fullscreenRendering} onChange={onSetFullscreenRendering} />
+                </SettingRow>
+                <SettingRow title="Force synchronized output" description="Tells Claude Code to wrap each TUI frame in DEC 2026 synchronized-output markers, so xterm.js renders only complete frames — fixes the 'flying letters' residue from half-drawn redraws. Sets CLAUDE_CODE_FORCE_SYNC_OUTPUT=1 on each new claude session. Introduced in Claude Code 2.1.129 (May 6, 2026).">
+                  <Toggle checked={forceSyncOutput} onChange={onSetForceSyncOutput} />
+                </SettingRow>
+              </Section>
+
+              <Section title="Startup" description="What happens to your saved tabs when xshell launches.">
+                <SettingRow title="Pre-initialize tabs on launch" description="Spawn each restored tab's session immediately at app start, instead of deferring until you click into the tab. Claude takes a few seconds to boot, so eager init means the session is ready (or close to it) by the time you switch to it. Open a tab whose session is still booting and the 'Starting Claude…' spinner shows until the first frame renders.">
+                  <Toggle checked={eagerInitTabs} onChange={onSetEagerInitTabs} />
                 </SettingRow>
               </Section>
 
@@ -244,6 +286,7 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
           )}
 
           {active === "about" && (
+            <>
             <Section title="Version" description="xshell ships via GitHub Releases. The check below queries GitHub for the latest tagged release.">
               <SettingRow title="Installed version" description="The version of xshell currently running. Comes from the bundled tauri.conf.json — restart the app after updating.">
                 <span className="settings-version-current">{updateInfo.currentVersion || "—"}</span>
@@ -268,22 +311,46 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                 </div>
               </SettingRow>
               {updateInfo.updateAvailable && (
-                <SettingRow title="Update" description="Run the install script to update in place, or download the binary from the release page.">
-                  <div className="settings-version-row">
-                    <CodeCopy text={detectInstallCommand().command} />
-                    {updateInfo.releaseUrl && (
-                      <button className="btn btn-ghost settings-action-btn" onClick={() => invoke("open_url", { url: updateInfo.releaseUrl! }).catch(() => {})}><ExternalLink size={11} /> View release</button>
+                <SettingRow title="Update" description="Click Install to run the script automatically, copy the one-liner, or grab the binary from the release page.">
+                  <div className="settings-update-col">
+                    <div className="settings-version-row">
+                      <button className="btn btn-primary settings-action-btn" onClick={installer.run} disabled={installer.state !== "idle"}>
+                        {installer.state === "checking" ? <><Loader2 size={11} className="settings-spin" /> Pinging xshell.sh…</> :
+                         installer.state === "running"  ? <><Loader2 size={11} className="settings-spin" /> Installer launched</> :
+                                                          <><Download size={11} /> Install update</>}
+                      </button>
+                      <CodeCopy text={detectInstallCommand().command} />
+                      {updateInfo.releaseUrl && (
+                        <button className="btn btn-ghost settings-action-btn" onClick={() => invoke("open_url", { url: updateInfo.releaseUrl! }).catch(() => {})}><ExternalLink size={11} /> View release</button>
+                      )}
+                    </div>
+                    {installer.error && (
+                      <div className="settings-install-error">
+                        <AlertTriangle size={12} />
+                        <span>{installer.error}</span>
+                        {updateInfo.releaseUrl && (
+                          <button className="btn btn-ghost settings-action-btn" onClick={() => invoke("open_url", { url: updateInfo.releaseUrl! }).catch(() => {})}><ExternalLink size={11} /> Open releases</button>
+                        )}
+                      </div>
+                    )}
+                    {installer.state === "running" && !installer.error && (
+                      <div className="settings-install-hint">A new console window is running the installer — once it finishes, restart xshell to pick up the new version.</div>
                     )}
                   </div>
                 </SettingRow>
               )}
-              {updateInfo.updateAvailable && updateInfo.releaseNotes && (
-                <div className="settings-release-notes">
-                  <div className="settings-release-notes-head">Release notes — v{updateInfo.latestVersion}</div>
-                  <div className="settings-release-notes-body md-content">{renderMarkdown(updateInfo.releaseNotes)}</div>
-                </div>
-              )}
             </Section>
+
+            {updateInfo.releases.length > 0 && (
+              <Section title="Changelog" description="Recent xshell releases pulled from GitHub. Click a version to expand its release notes.">
+                <div className="settings-changelog">
+                  {updateInfo.releases.map(r => (
+                    <ChangelogRow key={r.version} entry={r} currentVersion={updateInfo.currentVersion} />
+                  ))}
+                </div>
+              </Section>
+            )}
+            </>
           )}
         </div>
       </div>

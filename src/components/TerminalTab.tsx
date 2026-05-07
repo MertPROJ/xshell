@@ -111,6 +111,11 @@ interface TerminalTabProps {
   defaultFontSize: number;
   defaultShellId: string;
   fullscreenRendering: boolean;
+  forceSyncOutput: boolean;
+  // When true, spawn the backend PTY as soon as this tab mounts even if its host is currently
+  // hidden (parking div / inactive group leaf). When false (legacy behavior), spawn waits
+  // until the host has non-zero dimensions — i.e. until the user actually clicks the tab.
+  eagerInit: boolean;
   theme: ThemeMode;
   // Encoded project dir name (e.g. `C--Users-foo-app`) so we can fetch session stats from
   // `~/.claude/projects/<encoded>/<id>.jsonl`. Empty when the project hasn't been seen by
@@ -158,7 +163,7 @@ const MIN_PANEL = 200;
 const MAX_PANEL = 600;
 const DEFAULT_PANEL = 280;
 
-export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, theme, projectEncodedName, showTerminalHeaderStats, onBranchSwitch }: TerminalTabProps) {
+export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, forceSyncOutput, eagerInit, theme, projectEncodedName, showTerminalHeaderStats, onBranchSwitch }: TerminalTabProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -298,6 +303,14 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
             fitAddon.fit();
             spawnBackend(term, fitAddon);
           });
+        } else if (eagerInit) {
+          // Host is hidden (e.g. parked while another tab is active) but the user opted
+          // into eager init — spawn anyway. xterm boots at its default 80x24; the
+          // ResizeObserver + IntersectionObserver below will fit + send a SIGWINCH the
+          // moment the host is reparented into a visible slot, so claude gets the right
+          // dimensions on first view. Without this, every restored tab waits to spawn
+          // until the user clicks it, which makes the launch experience feel sluggish.
+          requestAnimationFrame(() => spawnBackend(term, fitAddon));
         } else {
           requestAnimationFrame(tick);
         }
@@ -360,7 +373,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
         // user's default shell setting, so claude runs under the shell the user picked.
         const effectiveShellId = tabRef.current.shellId || (shellMode === "claude" ? defaultShellId : null);
         const shellCommand = effectiveShellId ? (getShellById(effectiveShellId)?.command || null) : null;
-        await invoke("spawn_terminal", { id, sessionId: tabRef.current.sessionId || null, customName: tabRef.current.customName || null, cwd: tabRef.current.projectPath || ".", cols: term.cols, rows: term.rows, shellMode, shellCommand, shellId: effectiveShellId, fullscreenRendering });
+        await invoke("spawn_terminal", { id, sessionId: tabRef.current.sessionId || null, customName: tabRef.current.customName || null, cwd: tabRef.current.projectPath || ".", cols: term.cols, rows: term.rows, shellMode, shellCommand, shellId: effectiveShellId, fullscreenRendering, forceSyncOutput });
         // Post-spawn nudge for ink-based TUIs (claude code). Some Ink renderers ignore the
         // very first SIGWINCH if it arrives mid-bootstrap; a delayed re-fit + forced PTY
         // resize ensures the final cols/rows are picked up cleanly even if xterm's own

@@ -1211,6 +1211,74 @@ fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+// Probe whether the install host is genuinely reachable. Used by the auto-installer in Settings →
+// About so the UI can fall back to "download from GitHub manually" instead of spawning a broken
+// PowerShell window.
+//
+// Why HTTPS + content check (not just a TCP connect): corporate networks often DNS-sinkhole
+// blocked domains to a server that *does* accept TCP/443 so it can serve a blocked-page warning.
+// A raw connect would falsely report "reachable". We instead fetch the actual install script and
+// require the body to look like the real thing. ureq is configured to use rustls with the bundled
+// webpki-roots (Mozilla's CA list) — it deliberately does NOT honor the OS root store, so an
+// HTTPS-intercepting proxy that's installed a corporate CA into Windows can't fake xshell.sh.
+#[tauri::command]
+fn check_reachable(host: String) -> bool {
+    let url = format!("https://{}/install.ps1", host);
+    let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(5)).call();
+    match resp {
+        Ok(r) if r.status() == 200 => {
+            // The real install.ps1 references xshell repeatedly and is well over 200 bytes; a
+            // sinkhole's blocked-page HTML is short and doesn't mention xshell.
+            r.into_string().map(|b| b.len() > 200 && b.to_lowercase().contains("xshell")).unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+// Spawn the install one-liner in a fresh visible console so the user can watch progress and the
+// new binary can replace this running .exe (Windows locks the on-disk binary while it runs, so
+// the script needs to outlive the parent process). On Windows we pop a new PowerShell window via
+// `cmd /c start`; on macOS we tell Terminal.app to open a new window running the bash one-liner;
+// on Linux we try a few common terminal emulators in order.
+#[tauri::command]
+fn run_install_script() -> Result<(), String> {
+    use std::process::Command;
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = Command::new("cmd");
+        cmd.args([
+            "/c", "start", "", "powershell.exe",
+            "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-NoExit",
+            "-Command", "irm https://xshell.sh/install.ps1 | iex",
+        ]);
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW for the cmd shim itself
+        cmd.spawn().map_err(|e| format!("Failed to launch installer: {}", e))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"tell application "Terminal" to do script "curl -fsSL https://xshell.sh/install.sh | bash""#;
+        Command::new("osascript").arg("-e").arg(script).spawn()
+            .map_err(|e| format!("Failed to launch installer: {}", e))?;
+        return Ok(());
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let script = "curl -fsSL https://xshell.sh/install.sh | bash; echo; read -p 'Press Enter to close…' _";
+        for term in ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"].iter() {
+            let res = match *term {
+                "gnome-terminal" => Command::new(term).args(["--", "bash", "-lc", script]).spawn(),
+                "konsole"        => Command::new(term).args(["-e", "bash", "-lc", script]).spawn(),
+                _                => Command::new(term).args(["-e", "bash", "-lc", script]).spawn(),
+            };
+            if res.is_ok() { return Ok(()); }
+        }
+        return Err("No supported terminal emulator found (tried gnome-terminal, konsole, xterm).".into());
+    }
+}
+
 // ── Git Status ────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1485,7 +1553,7 @@ fn git_checkout(cwd: String, branch: String) -> Result<(), String> {
 // ── Terminal / PTY Commands ────────────────────────────────────────────
 
 #[tauri::command]
-fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, session_id: Option<String>, custom_name: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>, fullscreen_rendering: Option<bool>) -> Result<(), String> {
+fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, session_id: Option<String>, custom_name: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>, fullscreen_rendering: Option<bool>, force_sync_output: Option<bool>) -> Result<(), String> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| format!("Failed to open PTY: {}", e))?;
 
@@ -1564,11 +1632,23 @@ fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, sessio
         for a in &claude_args { c.arg(a); }
         c
     };
+    // Tag the terminal so Claude Code's OTEL telemetry attributes sessions to this app
+    // (telemetry reads `terminal.type` from TERM_PROGRAM; without this we'd land in the
+    // Unknown bucket). Always set — no user-facing toggle.
+    cmd.env("TERM_PROGRAM", "xshell.sh");
     // Claude Code's flicker-free / alternate-screen-buffer renderer is opt-in via env var.
     // Default ON for any claude-mode spawn; raw shells don't get it (no claude process to read it).
     // Inherited by the wrapping shell → claude child, so setting it here is sufficient.
     if mode != "raw" && fullscreen_rendering.unwrap_or(true) {
         cmd.env("CLAUDE_CODE_NO_FLICKER", "1");
+    }
+    // Force synchronized output mode (DEC 2026). Claude's auto-detection looks at $TERM
+    // and won't enable sync output for plain xterm-256color, but xterm.js v5+ supports it
+    // natively. With this flag, claude wraps each TUI frame in \x1b[?2026h..\x1b[?2026l
+    // so xterm renders only complete frames — fixes the "flying letters" residue we get
+    // when xterm sees half-drawn frames. Requires Claude Code ≥ 2.1.129.
+    if mode != "raw" && force_sync_output.unwrap_or(true) {
+        cmd.env("CLAUDE_CODE_FORCE_SYNC_OUTPUT", "1");
     }
     // Empty cwd → fall back to the user's home directory (raw shells launched from home view).
     let effective_cwd = if cwd.is_empty() {
@@ -1766,7 +1846,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(AppState { terminals: Mutex::new(HashMap::new()) })
-        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, spawn_terminal, write_terminal, resize_terminal, close_terminal])
+        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, open_url, check_reachable, run_install_script, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, spawn_terminal, write_terminal, resize_terminal, close_terminal])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

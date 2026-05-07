@@ -3,6 +3,13 @@ import { getVersion } from "@tauri-apps/api/app";
 
 const REPO = "MertPROJ/xshell";
 
+export interface ReleaseEntry {
+  version: string;
+  url: string;
+  notes: string;
+  publishedAt: string | null;
+}
+
 export interface UpdateInfo {
   currentVersion: string;
   latestVersion: string | null;
@@ -10,6 +17,7 @@ export interface UpdateInfo {
   releaseUrl: string | null;
   releaseNotes: string | null;
   publishedAt: string | null;
+  releases: ReleaseEntry[];
   loading: boolean;
   error: string | null;
   refresh: () => void;
@@ -30,16 +38,13 @@ function cmpSemver(a: string, b: string): number {
   return 0;
 }
 
-// Checks GitHub Releases for a newer version of xshell. Hits /releases/latest (which already
-// excludes drafts + prereleases), normalizes the tag, and exposes everything the UI needs:
-// the version comparison drives the red badge on the settings cog, and the rest populates the
-// About page in Settings. Cached for the session — re-fetch via `refresh()`.
+// Checks GitHub Releases for newer versions of xshell. Hits /releases?per_page=20, filters out
+// drafts + prereleases, and exposes both the latest entry (drives the red badge on the settings
+// cog) and the full list (powers the changelog in Settings → About). Cached for the session —
+// re-fetch via `refresh()`.
 export function useUpdateCheck(): UpdateInfo {
   const [currentVersion, setCurrentVersion] = useState("");
-  const [latestVersion, setLatestVersion] = useState<string | null>(null);
-  const [releaseUrl, setReleaseUrl] = useState<string | null>(null);
-  const [releaseNotes, setReleaseNotes] = useState<string | null>(null);
-  const [publishedAt, setPublishedAt] = useState<string | null>(null);
+  const [releases, setReleases] = useState<ReleaseEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
@@ -53,14 +58,19 @@ export function useUpdateCheck(): UpdateInfo {
         const cv = await getVersion();
         if (cancelled) return;
         setCurrentVersion(cv);
-        const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: "application/vnd.github+json" } });
+        const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=20`, { headers: { Accept: "application/vnd.github+json" } });
         if (!res.ok) throw new Error(`GitHub responded ${res.status}`);
-        const data = await res.json() as { tag_name?: string; html_url?: string; body?: string; published_at?: string };
+        const data = await res.json() as Array<{ tag_name?: string; html_url?: string; body?: string; published_at?: string; draft?: boolean; prerelease?: boolean }>;
         if (cancelled) return;
-        setLatestVersion((data.tag_name || "").replace(/^v/i, "") || null);
-        setReleaseUrl(data.html_url || null);
-        setReleaseNotes(data.body || null);
-        setPublishedAt(data.published_at || null);
+        const list: ReleaseEntry[] = data
+          .filter(r => !r.draft && !r.prerelease && r.tag_name)
+          .map(r => ({
+            version: (r.tag_name || "").replace(/^v/i, ""),
+            url: r.html_url || "",
+            notes: r.body || "",
+            publishedAt: r.published_at || null,
+          }));
+        setReleases(list);
       } catch (e: any) {
         if (!cancelled) setError(e?.message || String(e));
       } finally {
@@ -71,6 +81,11 @@ export function useUpdateCheck(): UpdateInfo {
   }, [tick]);
 
   const refresh = useCallback(() => setTick(t => t + 1), []);
+  const latest = releases[0] || null;
+  const latestVersion = latest?.version ?? null;
+  const releaseUrl = latest?.url ?? null;
+  const releaseNotes = latest?.notes ?? null;
+  const publishedAt = latest?.publishedAt ?? null;
   const updateAvailable = !!latestVersion && !!currentVersion && cmpSemver(latestVersion, currentVersion) > 0;
-  return { currentVersion, latestVersion, updateAvailable, releaseUrl, releaseNotes, publishedAt, loading, error, refresh };
+  return { currentVersion, latestVersion, updateAvailable, releaseUrl, releaseNotes, publishedAt, releases, loading, error, refresh };
 }
