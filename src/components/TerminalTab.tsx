@@ -11,7 +11,7 @@ import type { Tab, GitStatus, GitFile, GitCommit, BranchInfo, SessionInfo, GitBr
 import { getShellById } from "../shells";
 import type { ThemeMode } from "./SettingsView";
 
-const DEFAULT_FONT_SIZE = 12;
+const DEFAULT_FONT_SIZE = 14;
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 32;
 
