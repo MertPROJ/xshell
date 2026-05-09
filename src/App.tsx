@@ -319,16 +319,11 @@ export default function App() {
             let changed = false;
             const next = prev.map(tab => {
               if (tab.projectPath?.toLowerCase() !== pp) return tab;
-              // Match by sessionId → update title if user renamed via /rename
-              if (tab.sessionId) {
-                const match = sessions.find(s => s.id === tab.sessionId);
-                if (match && match.title !== tab.title) { changed = true; return { ...tab, title: match.title }; }
-              }
-              // New chat with a customName → match by the title we assigned via `claude -n`
-              else if (tab.customName) {
-                const match = sessions.find(s => s.title === tab.customName);
-                if (match) { changed = true; return { ...tab, sessionId: match.id }; }
-              }
+              // Tabs are created with a pre-allocated sessionId (see handleNewChat), so we only
+              // ever match on that — picks up `/rename`, `ai-title`, and first-prompt fallback alike.
+              if (!tab.sessionId) return tab;
+              const match = sessions.find(s => s.id === tab.sessionId);
+              if (match && match.title !== tab.title) { changed = true; return { ...tab, title: match.title }; }
               return tab;
             });
             return changed ? next : prev;
@@ -472,7 +467,7 @@ export default function App() {
   // metadata — the PTY is already attached to the new sessionId's JSONL, so nothing else
   // needs to change.
   const handleSwitchTabToBranch = useCallback((tabId: string, newSessionId: string, newTitle: string) => {
-    setTabs(prev => prev.map(t => t.id === tabId ? { ...t, sessionId: newSessionId, title: newTitle, customName: undefined } : t));
+    setTabs(prev => prev.map(t => t.id === tabId ? { ...t, sessionId: newSessionId, title: newTitle } : t));
   }, []);
 
   // Apply always-on-top on startup once the value has been restored from disk.
@@ -575,10 +570,12 @@ export default function App() {
 
   const handleNewChat = useCallback((project: ProjectInfo) => {
     const tabId = `terminal-new-${Date.now()}`;
-    // Generate a unique name we can match against when the session is created.
-    // Claude CLI accepts this via `-n <name>` and writes it as customTitle in the JSONL.
-    const customName = `Chat-${Math.random().toString(36).slice(2, 8)}`;
-    setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: customName, customName, projectPath: project.path, projectName: project.name, shellMode: "claude", lastActiveAt: Date.now() }]);
+    // Pre-allocate a UUID and pass it to Claude via `--session-id`. Two wins over the old
+    // `-n Chat-xxxxxx` approach: (1) we know the JSONL filename from the start, so the polling
+    // sync can match by sessionId immediately instead of racing on customTitle; (2) Claude's
+    // `ai-title` summary actually fires (it's suppressed when customTitle is set).
+    const sessionId = crypto.randomUUID();
+    setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: "New Chat", sessionId, projectPath: project.path, projectName: project.name, shellMode: "claude", lastActiveAt: Date.now() }]);
     setActiveTabId(tabId);
   }, []);
 
