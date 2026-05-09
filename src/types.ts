@@ -204,7 +204,6 @@ export interface Tab {
   type: 'home' | 'terminal';
   title: string;
   sessionId?: string;
-  customName?: string; // for new chats: passed to `claude -n <name>` so the session is trackable
   projectPath?: string;
   projectName?: string;
   encodedName?: string;

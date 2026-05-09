@@ -159,7 +159,14 @@ fn parse_session(path: &std::path::Path, project_name: &str, project_path: &str)
     let file = fs::File::open(path).ok()?;
     let reader = BufReader::new(file);
 
-    let mut title = String::new();
+    // Three independent title sources. `custom-title` is what `/rename` writes (also `claude -n`,
+    // though the app no longer uses that flag). `agent-name` mirrors `custom-title` for branched
+    // sessions. `ai-title` is Claude's auto-summary, emitted after the first turn — only present
+    // when no custom title exists. We resolve precedence at the end so a user-chosen name always
+    // beats the AI summary.
+    let mut custom_title = String::new();
+    let mut agent_name = String::new();
+    let mut ai_title = String::new();
     let mut first_human_message = String::new();
     let mut message_count: usize = 0;
     let mut git_branch = String::new();
@@ -220,12 +227,13 @@ fn parse_session(path: &std::path::Path, project_name: &str, project_path: &str)
 
         match ty {
             Some("custom-title") => {
-                if let Some(t) = json.get("customTitle").and_then(|t| t.as_str()) { title = t.to_string(); }
+                if let Some(t) = json.get("customTitle").and_then(|t| t.as_str()) { custom_title = t.to_string(); }
+            }
+            Some("ai-title") => {
+                if let Some(t) = json.get("aiTitle").and_then(|t| t.as_str()) { ai_title = t.to_string(); }
             }
             Some("agent-name") => {
-                if title.is_empty() {
-                    if let Some(t) = json.get("agentName").and_then(|t| t.as_str()) { title = t.to_string(); }
-                }
+                if let Some(t) = json.get("agentName").and_then(|t| t.as_str()) { agent_name = t.to_string(); }
             }
             Some("human") | Some("user") => {
                 // Both real user prompts AND tool-result responses arrive as `type: "user"`.
@@ -386,7 +394,13 @@ fn parse_session(path: &std::path::Path, project_name: &str, project_path: &str)
         }
     }
 
-    let display_title = if !title.is_empty() { title } else if !first_human_message.is_empty() { first_human_message } else { format!("Session {}", &session_id[..8.min(session_id.len())]) };
+    // Title precedence: user-chosen names (custom-title from /rename, agent-name from /branch)
+    // beat Claude's auto-summary, which beats the first prompt, which beats the bare session id.
+    let display_title = if !custom_title.is_empty() { custom_title }
+        else if !agent_name.is_empty() { agent_name }
+        else if !ai_title.is_empty() { ai_title }
+        else if !first_human_message.is_empty() { first_human_message }
+        else { format!("Session {}", &session_id[..8.min(session_id.len())]) };
     // Prefer the real last-message timestamp; fall back to file mtime for brand-new sessions
     // that haven't produced a user/assistant line yet.
     let timestamp = if last_message_ts.is_empty() { mtime_iso } else { last_message_ts };
@@ -1553,16 +1567,23 @@ fn git_checkout(cwd: String, branch: String) -> Result<(), String> {
 // ── Terminal / PTY Commands ────────────────────────────────────────────
 
 #[tauri::command]
-fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, session_id: Option<String>, custom_name: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>, fullscreen_rendering: Option<bool>, force_sync_output: Option<bool>) -> Result<(), String> {
+fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, session_id: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>, fullscreen_rendering: Option<bool>, force_sync_output: Option<bool>) -> Result<(), String> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| format!("Failed to open PTY: {}", e))?;
 
     let mode = shell_mode.as_deref().unwrap_or("claude");
-    // Build the claude argv tail (session resume / custom name). Reused by every claude-mode branch.
+    // New chats arrive with a pre-allocated UUID and no JSONL on disk → use `--session-id` so
+    // Claude creates the session under our UUID (and leaves customTitle empty so ai-title can
+    // fire). Existing sessions have a JSONL on disk → `--resume` instead.
     let claude_args: Vec<String> = {
         let mut v = Vec::new();
-        if let Some(ref sid) = session_id { v.push("--resume".into()); v.push(sid.clone()); }
-        else if let Some(ref name) = custom_name { v.push("-n".into()); v.push(name.clone()); }
+        if let Some(ref sid) = session_id {
+            let jsonl_exists = get_claude_projects_dir()
+                .map(|d| d.join(encode_project_name(&cwd)).join(format!("{}.jsonl", sid)).exists())
+                .unwrap_or(false);
+            v.push(if jsonl_exists { "--resume".into() } else { "--session-id".into() });
+            v.push(sid.clone());
+        }
         v
     };
     let shell_kind = shell_id.as_deref().unwrap_or("");

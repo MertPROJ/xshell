@@ -373,7 +373,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
         // user's default shell setting, so claude runs under the shell the user picked.
         const effectiveShellId = tabRef.current.shellId || (shellMode === "claude" ? defaultShellId : null);
         const shellCommand = effectiveShellId ? (getShellById(effectiveShellId)?.command || null) : null;
-        await invoke("spawn_terminal", { id, sessionId: tabRef.current.sessionId || null, customName: tabRef.current.customName || null, cwd: tabRef.current.projectPath || ".", cols: term.cols, rows: term.rows, shellMode, shellCommand, shellId: effectiveShellId, fullscreenRendering, forceSyncOutput });
+        await invoke("spawn_terminal", { id, sessionId: tabRef.current.sessionId || null, cwd: tabRef.current.projectPath || ".", cols: term.cols, rows: term.rows, shellMode, shellCommand, shellId: effectiveShellId, fullscreenRendering, forceSyncOutput });
         // Post-spawn nudge for ink-based TUIs (claude code). Some Ink renderers ignore the
         // very first SIGWINCH if it arrives mid-bootstrap; a delayed re-fit + forced PTY
         // resize ensures the final cols/rows are picked up cleanly even if xterm's own
@@ -555,14 +555,14 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
       // Always auto-follow. Add to known first so we don't re-detect on the next tick
       // (the new jsonl keeps getting writes from the PTY — it's pre-existing now).
       knownSessionIdsRef.current.add(info.new_session_id);
-      const oldTitle = tab.customName || tab.title || "previous session";
+      const oldTitle = tab.title || "previous session";
       onBranchSwitch(tab.id, info.new_session_id, info.title);
       // Show the confirmation banner. Auto-dismiss after ~6s so it doesn't linger.
       if (branchNoticeTimerRef.current) window.clearTimeout(branchNoticeTimerRef.current);
       setBranchNotice({ oldTitle, newTitle: info.title });
       branchNoticeTimerRef.current = window.setTimeout(() => setBranchNotice(null), 6000);
     } catch (_) {}
-  }, [tab.projectPath, tab.sessionId, tab.shellMode, tab.id, tab.title, tab.customName, onBranchSwitch]);
+  }, [tab.projectPath, tab.sessionId, tab.shellMode, tab.id, tab.title, onBranchSwitch]);
 
   // Re-seed whenever the tab's sessionId changes (initial attach, or after a branch-switch).
   useEffect(() => {
@@ -601,7 +601,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     lastSessionIdRef.current = tab.sessionId;
     if (!prevTitle || prevTitle === tab.title) return;
     if (prevSessionId !== tab.sessionId) return; // /branch handles its own banner
-    if (!tab.sessionId) return; // pre-link customName churn isn't a rename
+    if (!tab.sessionId) return;
     if (renameNoticeTimerRef.current) window.clearTimeout(renameNoticeTimerRef.current);
     setRenameNotice({ oldTitle: prevTitle, newTitle: tab.title });
     renameNoticeTimerRef.current = window.setTimeout(() => setRenameNotice(null), 6000);
