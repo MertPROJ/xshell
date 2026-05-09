@@ -104,7 +104,7 @@ export default function App() {
   // dependency on the statusline hook — the chart series comes from xshell-stats data.
   const [showProjectStatsChart, setShowProjectStatsChart] = useState(true);
   const [terminalBgColor, setTerminalBgColor] = useState("#1c1c1b");
-  const [defaultTerminalFontSize, setDefaultTerminalFontSize] = useState(12);
+  const [defaultTerminalFontSize, setDefaultTerminalFontSize] = useState(14);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   // Sets CLAUDE_CODE_NO_FLICKER=1 on every claude session so it uses the alternate-screen
   // buffer renderer. Default ON — flicker-free is what most users want; only flip if the
