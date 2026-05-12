@@ -1566,6 +1566,26 @@ fn git_checkout(cwd: String, branch: String) -> Result<(), String> {
 
 // ── Terminal / PTY Commands ────────────────────────────────────────────
 
+// The Git Bash preset sends bare `bash.exe`, which on Windows resolves via PATH and gets
+// shadowed by C:\Windows\System32\bash.exe (the WSL launcher) — that dies with a cryptic
+// `execvpe(/bin/bash) failed` when no WSL distro is installed. Probe known Git for Windows
+// install locations and return the first existing match so we spawn the real Git Bash.
+fn resolve_gitbash_path() -> Option<PathBuf> {
+    let candidates: &[(&str, &[&str])] = &[
+        ("ProgramFiles",      &["Git", "bin", "bash.exe"]),
+        ("ProgramFiles(x86)", &["Git", "bin", "bash.exe"]),
+        ("LOCALAPPDATA",      &["Programs", "Git", "bin", "bash.exe"]),
+    ];
+    for (env_var, parts) in candidates {
+        if let Ok(base) = std::env::var(env_var) {
+            let mut p = PathBuf::from(base);
+            for part in *parts { p.push(part); }
+            if p.exists() { return Some(p); }
+        }
+    }
+    None
+}
+
 #[tauri::command]
 fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, session_id: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>, fullscreen_rendering: Option<bool>, force_sync_output: Option<bool>) -> Result<(), String> {
     let pty_system = native_pty_system();
@@ -1587,11 +1607,20 @@ fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, sessio
         v
     };
     let shell_kind = shell_id.as_deref().unwrap_or("");
+    // Override the frontend-supplied `bash.exe` for the Git Bash preset with an absolute path
+    // — see resolve_gitbash_path() for why. Surface a clear error if Git for Windows isn't
+    // installed, instead of letting WSL emit its execvpe message.
+    let gitbash_resolved: Option<String> = if shell_kind == "gitbash" {
+        Some(resolve_gitbash_path().ok_or_else(|| "Git Bash not found. Install Git for Windows or choose a different shell preset.".to_string())?.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+    let effective_shell = gitbash_resolved.as_deref().or(shell_command.as_deref());
     let mut cmd = if mode == "raw" {
         // Raw shell: spawn the chosen shell directly (no claude wrapping).
-        let shell = shell_command.as_deref().unwrap_or_else(|| if cfg!(windows) { "powershell.exe" } else { "bash" });
+        let shell = effective_shell.unwrap_or_else(|| if cfg!(windows) { "powershell.exe" } else { "bash" });
         CommandBuilder::new(shell)
-    } else if let Some(shell) = shell_command.as_deref().filter(|s| !s.is_empty()) {
+    } else if let Some(shell) = effective_shell.filter(|s| !s.is_empty()) {
         // Claude mode with an explicit host shell: launch the shell and run `claude` inside it
         // so the user's preferred shell wraps the session (and stays alive after claude exits).
         match shell_kind {
