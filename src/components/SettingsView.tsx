@@ -35,6 +35,8 @@ interface SettingsViewProps {
   onSetFullscreenRendering: (enabled: boolean) => void;
   forceSyncOutput: boolean;
   onSetForceSyncOutput: (enabled: boolean) => void;
+  webglRendering: boolean;
+  onSetWebglRendering: (enabled: boolean) => void;
   eagerInitTabs: boolean;
   onSetEagerInitTabs: (enabled: boolean) => void;
   showRateLimitInSidebar: boolean;
@@ -121,7 +123,7 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, webglRendering, onSetWebglRendering, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
@@ -235,6 +237,9 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                       <button className="settings-reset-btn settings-reset-btn-block" onClick={() => onSetDefaultTerminalFontSize(14)} {...ttProps(tt, "Reset to default")}><RotateCcw size={11} /> Reset</button>
                     )}
                   </div>
+                </SettingRow>
+                <SettingRow title="GPU-accelerated rendering" description="Render terminal cells via WebGL. Fixes the subpixel seam between half-block characters (visible on the Claude Code banner). Falls back to the DOM renderer if WebGL is unavailable.">
+                  <Toggle checked={webglRendering} onChange={onSetWebglRendering} />
                 </SettingRow>
               </Section>
 
