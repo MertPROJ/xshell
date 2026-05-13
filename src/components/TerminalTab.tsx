@@ -5,6 +5,7 @@ import { load } from "@tauri-apps/plugin-store";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { GitBranch, ArrowUp, ArrowDown, RefreshCw, ChevronRight, ChevronDown, Plus, Minus, History, GitFork, Pencil, X as XIcon, Check, Search, AlertTriangle, Cloud } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import type { Tab, GitStatus, GitFile, GitCommit, BranchInfo, SessionInfo, GitBranch as GitBranchEntry } from "../types";
@@ -14,6 +15,10 @@ import type { ThemeMode } from "./SettingsView";
 const DEFAULT_FONT_SIZE = 14;
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 32;
+// Bold weight always sits two CSS steps above the regular weight so the contrast between
+// normal/bold scales with the user's pick. Capped at 900 (the heaviest CSS weight).
+const BOLD_OFFSET = 200;
+const MAX_FONT_WEIGHT = 900;
 
 // Default xterm bg per app theme. Exported so SettingsView's "Reset" button can fall
 // back to the right shade per theme, and so App.tsx can detect "user is on default"
@@ -112,6 +117,15 @@ interface TerminalTabProps {
   defaultShellId: string;
   fullscreenRendering: boolean;
   forceSyncOutput: boolean;
+  // Use the GPU-accelerated WebGL renderer for xterm.js. Default ON — it eliminates
+  // subpixel seams in the half-block characters that Claude Code's startup banner uses,
+  // and is generally a smoother render. Falls back to the DOM renderer automatically if
+  // the host's GPU can't provide a WebGL context (e.g. forced-software-render WebViews).
+  webglRendering: boolean;
+  // CSS font weight for regular text (100–700). Bold text auto-derives as +200, capped at
+  // 900. Defaults to 300 — bumping to 400+ helps compensate for the lack of subpixel AA
+  // under the WebGL renderer.
+  terminalFontWeight: number;
   // When true, spawn the backend PTY as soon as this tab mounts even if its host is currently
   // hidden (parking div / inactive group leaf). When false (legacy behavior), spawn waits
   // until the host has non-zero dimensions — i.e. until the user actually clicks the tab.
@@ -163,10 +177,11 @@ const MIN_PANEL = 200;
 const MAX_PANEL = 600;
 const DEFAULT_PANEL = 280;
 
-export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, forceSyncOutput, eagerInit, theme, projectEncodedName, showTerminalHeaderStats, onBranchSwitch }: TerminalTabProps) {
+export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, forceSyncOutput, webglRendering, terminalFontWeight, eagerInit, theme, projectEncodedName, showTerminalHeaderStats, onBranchSwitch }: TerminalTabProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const webglAddonRef = useRef<WebglAddon | null>(null);
   const [_error, setError] = useState<string | null>(null);
   const tabRef = useRef(tab);
   // Loading state: true from spawn until the PTY emits its first byte. That window covers
@@ -241,8 +256,8 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     const term = new Terminal({
       theme: paletteFor(theme, terminalBgColor),
       fontFamily: "Consolas, 'Courier New', monospace",
-      fontWeight: 300,
-      fontWeightBold: 500,
+      fontWeight: terminalFontWeight,
+      fontWeightBold: Math.min(MAX_FONT_WEIGHT, terminalFontWeight + BOLD_OFFSET),
       fontSize: defaultFontSizeRef.current,
       lineHeight: 1.3,
       cursorBlink: true,
@@ -258,6 +273,21 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     term.open(containerRef.current);
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
+
+    // WebGL renderer — must be loaded AFTER term.open(), since the addon attaches to the
+    // open xterm's DOM. Loading throws if the host can't give us a WebGL context (CI,
+    // forced-software-render WebViews); in that case we silently fall back to the default
+    // DOM renderer. The addon also raises a `contextLoss` event if the driver yanks the
+    // context later — we dispose on that so xterm reverts cleanly to DOM rendering instead
+    // of leaving a frozen canvas behind.
+    if (webglRendering) {
+      try {
+        const addon = new WebglAddon();
+        addon.onContextLoss(() => { addon.dispose(); webglAddonRef.current = null; });
+        term.loadAddon(addon);
+        webglAddonRef.current = addon;
+      } catch (_) { /* WebGL unavailable — DOM renderer takes over automatically */ }
+    }
 
     // Intercept Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 for zoom, and Ctrl+V for paste
     // (Windows Terminal convention — the terminal would otherwise swallow Ctrl+V as ^V).
@@ -411,9 +441,44 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
       containerEl?.removeEventListener("contextmenu", onContextMenu);
       containerEl?.removeEventListener("wheel", onWheel);
       if ((term as any)._cleanup) (term as any)._cleanup();
+      // Dispose the WebGL addon explicitly before the terminal — its docs note that an
+      // explicit dispose() is required to free the GL resources cleanly. term.dispose()
+      // does cascade, but ordering it this way mirrors the xterm.js example.
+      if (webglAddonRef.current) { webglAddonRef.current.dispose(); webglAddonRef.current = null; }
       term.dispose();
     };
   }, []);
+
+  // Apply font-weight changes live. Setting `term.options.fontWeight` (and the matching
+  // bold derivation) triggers an xterm internal redraw — and under the WebGL renderer it
+  // also rebuilds the glyph atlas, so the new weight shows up immediately without needing
+  // to dispose/recreate the terminal.
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+    term.options.fontWeight = terminalFontWeight as any;
+    term.options.fontWeightBold = Math.min(MAX_FONT_WEIGHT, terminalFontWeight + BOLD_OFFSET) as any;
+  }, [terminalFontWeight]);
+
+  // Live-toggle the WebGL renderer when the user flips the setting without recreating the
+  // terminal. Disposing the addon hands rendering back to the default DOM renderer; loading
+  // a fresh one switches back. Wrapped in try/catch so a runtime failure (driver loss, etc.)
+  // doesn't tear down the surrounding effect.
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+    if (webglRendering && !webglAddonRef.current) {
+      try {
+        const addon = new WebglAddon();
+        addon.onContextLoss(() => { addon.dispose(); webglAddonRef.current = null; });
+        term.loadAddon(addon);
+        webglAddonRef.current = addon;
+      } catch (_) {}
+    } else if (!webglRendering && webglAddonRef.current) {
+      webglAddonRef.current.dispose();
+      webglAddonRef.current = null;
+    }
+  }, [webglRendering]);
 
   // Refit terminal whenever the git panel opens/closes or resizes
   useEffect(() => {
