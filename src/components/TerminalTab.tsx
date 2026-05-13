@@ -15,6 +15,10 @@ import type { ThemeMode } from "./SettingsView";
 const DEFAULT_FONT_SIZE = 14;
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 32;
+// Bold weight always sits two CSS steps above the regular weight so the contrast between
+// normal/bold scales with the user's pick. Capped at 900 (the heaviest CSS weight).
+const BOLD_OFFSET = 200;
+const MAX_FONT_WEIGHT = 900;
 
 // Default xterm bg per app theme. Exported so SettingsView's "Reset" button can fall
 // back to the right shade per theme, and so App.tsx can detect "user is on default"
@@ -118,6 +122,10 @@ interface TerminalTabProps {
   // and is generally a smoother render. Falls back to the DOM renderer automatically if
   // the host's GPU can't provide a WebGL context (e.g. forced-software-render WebViews).
   webglRendering: boolean;
+  // CSS font weight for regular text (100–700). Bold text auto-derives as +200, capped at
+  // 900. Defaults to 300 — bumping to 400+ helps compensate for the lack of subpixel AA
+  // under the WebGL renderer.
+  terminalFontWeight: number;
   // When true, spawn the backend PTY as soon as this tab mounts even if its host is currently
   // hidden (parking div / inactive group leaf). When false (legacy behavior), spawn waits
   // until the host has non-zero dimensions — i.e. until the user actually clicks the tab.
@@ -169,7 +177,7 @@ const MIN_PANEL = 200;
 const MAX_PANEL = 600;
 const DEFAULT_PANEL = 280;
 
-export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, forceSyncOutput, webglRendering, eagerInit, theme, projectEncodedName, showTerminalHeaderStats, onBranchSwitch }: TerminalTabProps) {
+export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, forceSyncOutput, webglRendering, terminalFontWeight, eagerInit, theme, projectEncodedName, showTerminalHeaderStats, onBranchSwitch }: TerminalTabProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -248,8 +256,8 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     const term = new Terminal({
       theme: paletteFor(theme, terminalBgColor),
       fontFamily: "Consolas, 'Courier New', monospace",
-      fontWeight: 300,
-      fontWeightBold: 500,
+      fontWeight: terminalFontWeight,
+      fontWeightBold: Math.min(MAX_FONT_WEIGHT, terminalFontWeight + BOLD_OFFSET),
       fontSize: defaultFontSizeRef.current,
       lineHeight: 1.3,
       cursorBlink: true,
@@ -440,6 +448,17 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
       term.dispose();
     };
   }, []);
+
+  // Apply font-weight changes live. Setting `term.options.fontWeight` (and the matching
+  // bold derivation) triggers an xterm internal redraw — and under the WebGL renderer it
+  // also rebuilds the glyph atlas, so the new weight shows up immediately without needing
+  // to dispose/recreate the terminal.
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+    term.options.fontWeight = terminalFontWeight as any;
+    term.options.fontWeightBold = Math.min(MAX_FONT_WEIGHT, terminalFontWeight + BOLD_OFFSET) as any;
+  }, [terminalFontWeight]);
 
   // Live-toggle the WebGL renderer when the user flips the setting without recreating the
   // terminal. Disposing the addon hands rendering back to the default DOM renderer; loading
