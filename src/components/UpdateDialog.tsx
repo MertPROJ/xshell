@@ -13,13 +13,21 @@ interface Props { info: UpdateInfo; onDismiss: () => void; }
 // Settings cog and the About-tab dot are independent — they stay until the bundled version
 // actually catches up.
 export function UpdateDialog({ info, onDismiss }: Props) {
-  const installer = useInstaller();
+  const installer = useInstaller(info.update);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onDismiss(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onDismiss]);
+
+  const pct = installer.progress != null ? Math.round(installer.progress * 100) : null;
+  const busy = installer.state !== "idle";
+  const btnLabel =
+    installer.state === "downloading" ? <><Loader2 size={11} className="settings-spin" /> Downloading{pct != null ? ` ${pct}%` : "…"}</> :
+    installer.state === "installing"  ? <><Loader2 size={11} className="settings-spin" /> Installing…</> :
+    installer.state === "restarting"  ? <><Loader2 size={11} className="settings-spin" /> Restarting…</> :
+                                        <><Download size={11} /> Install update</>;
 
   return (
     <div className="md-overlay" onClick={onDismiss}>
@@ -32,7 +40,7 @@ export function UpdateDialog({ info, onDismiss }: Props) {
           <div className="upd-summary">
             xshell <strong>{info.latestVersion}</strong> is available — you're on <strong>{info.currentVersion}</strong>.
           </div>
-          <div className="upd-install">Hit the install button or download manually from github.</div>
+          <div className="upd-install">Click Install to download and apply the update; xshell will restart automatically.</div>
           {installer.error && (
             <div className="settings-install-error upd-install-error">
               <AlertTriangle size={12} />
@@ -42,8 +50,8 @@ export function UpdateDialog({ info, onDismiss }: Props) {
               )}
             </div>
           )}
-          {installer.state === "running" && !installer.error && (
-            <div className="settings-install-hint upd-install-hint">A new console window is running the installer — once it finishes, restart xshell to pick up the new version.</div>
+          {pct != null && busy && !installer.error && (
+            <div className="upd-progress"><div className="upd-progress-bar" style={{ width: `${pct}%` }} /></div>
           )}
           {info.releaseNotes && (
             <div className="upd-notes">
@@ -54,10 +62,8 @@ export function UpdateDialog({ info, onDismiss }: Props) {
         </div>
         <div className="upd-foot">
           <div className="upd-foot-spacer" />
-          <button className="btn btn-primary" onClick={installer.run} disabled={installer.state !== "idle"}>
-            {installer.state === "checking" ? <><Loader2 size={11} className="settings-spin" /> Pinging xshell.sh…</> :
-             installer.state === "running"  ? <><Loader2 size={11} className="settings-spin" /> Installer launched</> :
-                                              <><Download size={11} /> Install update</>}
+          <button className="btn btn-primary" onClick={installer.run} disabled={busy || !info.update}>
+            {btnLabel}
           </button>
           <button className="btn btn-ghost" onClick={onDismiss}>Dismiss</button>
           {info.releaseUrl && (

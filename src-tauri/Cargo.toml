@@ -14,16 +14,13 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
 portable-pty = "0.9"
 uuid = { version = "1", features = ["v4"] }
-# Used only by the auto-installer reachability probe in lib.rs::check_reachable. We deliberately
-# pick rustls + webpki-roots (not native-tls / OS truststore) so corporate HTTPS interception
-# proxies that install a custom root CA into Windows can't trick the probe into thinking
-# xshell.sh is reachable when it's actually being sinkholed.
-ureq = { version = "2", default-features = false, features = ["tls"] }
 
 # Dev profile: fast incremental rebuilds, light optimization for deps
 [profile.dev]
