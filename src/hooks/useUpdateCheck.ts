@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 
 const REPO = "MertPROJ/xshell";
 
@@ -18,32 +19,20 @@ export interface UpdateInfo {
   releaseNotes: string | null;
   publishedAt: string | null;
   releases: ReleaseEntry[];
+  update: Update | null;
   loading: boolean;
   error: string | null;
   refresh: () => void;
 }
 
-// Compare two semver-ish strings ("1.2.3", "v1.2.3", "1.2.3-beta.1"). Returns >0 if a > b.
-// Strips a leading "v" and any pre-release / build suffix — we only care about the numeric core
-// for "is the GitHub release newer than what's installed".
-function cmpSemver(a: string, b: string): number {
-  const norm = (s: string) => s.replace(/^v/i, "").split(/[-+]/)[0];
-  const pa = norm(a).split(".").map(n => parseInt(n, 10) || 0);
-  const pb = norm(b).split(".").map(n => parseInt(n, 10) || 0);
-  const len = Math.max(pa.length, pb.length);
-  for (let i = 0; i < len; i++) {
-    const da = pa[i] || 0, db = pb[i] || 0;
-    if (da !== db) return da - db;
-  }
-  return 0;
-}
-
-// Checks GitHub Releases for newer versions of xshell. Hits /releases?per_page=20, filters out
-// drafts + prereleases, and exposes both the latest entry (drives the red badge on the settings
-// cog) and the full list (powers the changelog in Settings → About). Cached for the session —
-// re-fetch via `refresh()`.
+// Source of truth is Tauri's updater plugin (`check()`) — it returns a signed Update or null,
+// and the same Update object is what `useInstaller` calls `downloadAndInstall()` on. We *also*
+// fetch the GitHub Releases list, but only to populate the multi-release changelog in
+// Settings → About. That secondary call is best-effort: a failure there doesn't block the
+// badge or the install button.
 export function useUpdateCheck(): UpdateInfo {
   const [currentVersion, setCurrentVersion] = useState("");
+  const [update, setUpdate] = useState<Update | null>(null);
   const [releases, setReleases] = useState<ReleaseEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,8 +47,17 @@ export function useUpdateCheck(): UpdateInfo {
         const cv = await getVersion();
         if (cancelled) return;
         setCurrentVersion(cv);
+        const u = await check();
+        if (cancelled) return;
+        setUpdate(u);
+      } catch (e: any) {
+        if (!cancelled) setError(e?.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+      try {
         const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=20`, { headers: { Accept: "application/vnd.github+json" } });
-        if (!res.ok) throw new Error(`GitHub responded ${res.status}`);
+        if (!res.ok) return;
         const data = await res.json() as Array<{ tag_name?: string; html_url?: string; body?: string; published_at?: string; draft?: boolean; prerelease?: boolean }>;
         if (cancelled) return;
         const list: ReleaseEntry[] = data
@@ -71,21 +69,17 @@ export function useUpdateCheck(): UpdateInfo {
             publishedAt: r.published_at || null,
           }));
         setReleases(list);
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message || String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      } catch { /* changelog is optional — offline / API rate limited is fine */ }
     })();
     return () => { cancelled = true; };
   }, [tick]);
 
   const refresh = useCallback(() => setTick(t => t + 1), []);
-  const latest = releases[0] || null;
-  const latestVersion = latest?.version ?? null;
-  const releaseUrl = latest?.url ?? null;
-  const releaseNotes = latest?.notes ?? null;
-  const publishedAt = latest?.publishedAt ?? null;
-  const updateAvailable = !!latestVersion && !!currentVersion && cmpSemver(latestVersion, currentVersion) > 0;
-  return { currentVersion, latestVersion, updateAvailable, releaseUrl, releaseNotes, publishedAt, releases, loading, error, refresh };
+  const latestVersion = update?.version ?? null;
+  const releaseUrl = latestVersion ? `https://github.com/${REPO}/releases/tag/v${latestVersion}` : null;
+  const fromChangelog = latestVersion ? releases.find(r => r.version === latestVersion) : undefined;
+  const releaseNotes = update?.body ?? fromChangelog?.notes ?? null;
+  const publishedAt = update?.date ?? fromChangelog?.publishedAt ?? null;
+  const updateAvailable = update !== null;
+  return { currentVersion, latestVersion, updateAvailable, releaseUrl, releaseNotes, publishedAt, releases, update, loading, error, refresh };
 }

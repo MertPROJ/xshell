@@ -9,8 +9,6 @@ import { DARK_TERM_BG, LIGHT_TERM_BG } from "./TerminalTab";
 import type { UpdateInfo, ReleaseEntry } from "../hooks/useUpdateCheck";
 import { useInstaller } from "../hooks/useInstaller";
 import { renderMarkdown } from "../markdown";
-import { detectInstallCommand } from "../installCommand";
-import { CodeCopy } from "./CodeCopy";
 
 export type ThemeMode = "dark" | "light";
 
@@ -132,7 +130,7 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
   // metrics toggles — there's no point letting users enable features that have no data
   // source. We re-probe whenever the wizard closes (in case they just installed the hook).
   const [statslineConfigured, setStatslineConfigured] = useState(false);
-  const installer = useInstaller();
+  const installer = useInstaller(updateInfo.update);
   const shells = getAvailableShells();
   const { tt, Tooltip } = useTooltip();
 
@@ -329,19 +327,22 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                 </div>
               </SettingRow>
               {updateInfo.updateAvailable && (
-                <SettingRow title="Update" description="Click Install to run the script automatically, copy the one-liner, or grab the binary from the release page.">
+                <SettingRow title="Update" description="Download and install the new version in place. xshell restarts automatically when the install finishes.">
                   <div className="settings-update-col">
                     <div className="settings-version-row">
-                      <button className="btn btn-primary settings-action-btn" onClick={installer.run} disabled={installer.state !== "idle"}>
-                        {installer.state === "checking" ? <><Loader2 size={11} className="settings-spin" /> Pinging xshell.sh…</> :
-                         installer.state === "running"  ? <><Loader2 size={11} className="settings-spin" /> Installer launched</> :
-                                                          <><Download size={11} /> Install update</>}
+                      <button className="btn btn-primary settings-action-btn" onClick={installer.run} disabled={installer.state !== "idle" || !updateInfo.update}>
+                        {installer.state === "downloading" ? <><Loader2 size={11} className="settings-spin" /> Downloading{installer.progress != null ? ` ${Math.round(installer.progress * 100)}%` : "…"}</> :
+                         installer.state === "installing"  ? <><Loader2 size={11} className="settings-spin" /> Installing…</> :
+                         installer.state === "restarting"  ? <><Loader2 size={11} className="settings-spin" /> Restarting…</> :
+                                                             <><Download size={11} /> Install update</>}
                       </button>
-                      <CodeCopy text={detectInstallCommand().command} />
                       {updateInfo.releaseUrl && (
                         <button className="btn btn-ghost settings-action-btn" onClick={() => invoke("open_url", { url: updateInfo.releaseUrl! }).catch(() => {})}><ExternalLink size={11} /> View release</button>
                       )}
                     </div>
+                    {installer.progress != null && installer.state !== "idle" && !installer.error && (
+                      <div className="upd-progress"><div className="upd-progress-bar" style={{ width: `${Math.round(installer.progress * 100)}%` }} /></div>
+                    )}
                     {installer.error && (
                       <div className="settings-install-error">
                         <AlertTriangle size={12} />
@@ -350,9 +351,6 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                           <button className="btn btn-ghost settings-action-btn" onClick={() => invoke("open_url", { url: updateInfo.releaseUrl! }).catch(() => {})}><ExternalLink size={11} /> Open releases</button>
                         )}
                       </div>
-                    )}
-                    {installer.state === "running" && !installer.error && (
-                      <div className="settings-install-hint">A new console window is running the installer — once it finishes, restart xshell to pick up the new version.</div>
                     )}
                   </div>
                 </SettingRow>
