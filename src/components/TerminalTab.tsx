@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useLayoutEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -8,6 +7,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { GitBranch, ArrowUp, ArrowDown, RefreshCw, ChevronRight, ChevronDown, Plus, Minus, History, GitFork, Pencil, X as XIcon, Check, Search, AlertTriangle, Cloud } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
+import { detectMonoFontFamily, ensureMonoFontsLoaded } from "../lib/fonts";
 import type { Tab, GitStatus, GitFile, GitCommit, BranchInfo, SessionInfo, GitBranch as GitBranchEntry } from "../types";
 import { getShellById } from "../shells";
 import type { ThemeMode } from "./SettingsView";
@@ -253,17 +253,23 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
   useEffect(() => {
     if (!containerRef.current) return;
 
+    // Rendering tactic: a real programming font (bundled JetBrains Mono, or an installed
+    // Nerd Font if present) at NORMAL line-height. The old Consolas + lineHeight:1.3 combo was
+    // what squeezed/misaligned the Claude Code logo and status-line glyphs — Consolas lacks the
+    // special glyphs and 1.3 stretched every cell 30% taller. No lineHeight here == xterm's
+    // default 1.0, so block/pixel art lands on a correct cell aspect ratio.
     const term = new Terminal({
       theme: paletteFor(theme, terminalBgColor),
-      fontFamily: "Consolas, 'Courier New', monospace",
+      fontFamily: detectMonoFontFamily(),
       fontWeight: terminalFontWeight,
       fontWeightBold: Math.min(MAX_FONT_WEIGHT, terminalFontWeight + BOLD_OFFSET),
       fontSize: defaultFontSizeRef.current,
-      lineHeight: 1.3,
-      cursorBlink: true,
+      cursorBlink: false,
       cursorStyle: "bar",
+      cursorInactiveStyle: "outline",
       scrollback: 10000,
       allowProposedApi: true,
+      minimumContrastRatio: 1,
     });
 
     const fitAddon = new FitAddon();
@@ -321,7 +327,9 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     // dimensions on spawn. Claude's Ink-based TUI then renders to that smaller box and
     // doesn't fully redraw until a real SIGWINCH (e.g. when the user resizes the window).
     // This is the "first render is too small" bug specific to xterm.js + ink CLIs.
-    loadZoom(tabRef.current.id, defaultFontSizeRef.current).then(size => {
+    // Gate the first fit on the bundled font being ready too — measuring the cell against a
+    // fallback metric and then swapping to JetBrains Mono would resize claude's TUI mid-boot.
+    Promise.all([loadZoom(tabRef.current.id, defaultFontSizeRef.current), ensureMonoFontsLoaded()]).then(([size]) => {
       fontSizeRef.current = size;
       term.options.fontSize = size;
       const el = containerRef.current;
@@ -371,15 +379,22 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     async function spawnBackend(term: Terminal, _fitAddon: FitAddon) {
       const id = tabRef.current.id;
 
-      const unlistenOutput = await listen<string>(`terminal-output-${id}`, (event) => {
+      // Transport: PTY output arrives as RAW BYTES over a Tauri Channel
+      // (binary ArrayBuffer, no JSON event + no utf8-lossy round-trip), pre-coalesced on the
+      // Rust side into whole-frame chunks. Feeding term.write a Uint8Array lets xterm's parser
+      // reassemble multibyte sequences across chunk boundaries — eliminating the partial-frame
+      // "flying letters" the old per-4KB `emit` produced.
+      const onData = new Channel<ArrayBuffer>();
+      onData.onmessage = (buf) => {
         if (!sawFirstOutputRef.current) {
           sawFirstOutputRef.current = true;
           setIsInitializing(false);
         }
-        term.write(event.payload);
-      });
+        term.write(new Uint8Array(buf));
+      };
 
-      const unlistenExit = await listen(`terminal-exit-${id}`, () => {
+      const onExit = new Channel<number>();
+      onExit.onmessage = () => {
         // Spawn failed before any output (e.g. claude not on PATH) — drop the loader so
         // the error message we're about to write isn't hidden behind it.
         if (!sawFirstOutputRef.current) {
@@ -387,7 +402,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
           setIsInitializing(false);
         }
         term.write("\r\n\x1b[90m[Session ended]\x1b[0m\r\n");
-      });
+      };
 
       const onDataDisposable = term.onData((data) => {
         invoke("write_terminal", { id, data }).catch(() => {});
@@ -403,7 +418,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
         // user's default shell setting, so claude runs under the shell the user picked.
         const effectiveShellId = tabRef.current.shellId || (shellMode === "claude" ? defaultShellId : null);
         const shellCommand = effectiveShellId ? (getShellById(effectiveShellId)?.command || null) : null;
-        await invoke("spawn_terminal", { id, sessionId: tabRef.current.sessionId || null, cwd: tabRef.current.projectPath || ".", cols: term.cols, rows: term.rows, shellMode, shellCommand, shellId: effectiveShellId, fullscreenRendering, forceSyncOutput });
+        await invoke("spawn_terminal", { id, sessionId: tabRef.current.sessionId || null, cwd: tabRef.current.projectPath || ".", cols: term.cols, rows: term.rows, shellMode, shellCommand, shellId: effectiveShellId, fullscreenRendering, forceSyncOutput, onData, onExit });
         // Post-spawn nudge for ink-based TUIs (claude code). Some Ink renderers ignore the
         // very first SIGWINCH if it arrives mid-bootstrap; a delayed re-fit + forced PTY
         // resize ensures the final cols/rows are picked up cleanly even if xterm's own
@@ -426,8 +441,10 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
       }
 
       (term as any)._cleanup = () => {
-        unlistenOutput();
-        unlistenExit();
+        // Channels have no explicit unsubscribe — dropping the handler stops processing, and
+        // close_terminal tears down the PTY (and thus the Rust side of the channel).
+        onData.onmessage = () => {};
+        onExit.onmessage = () => {};
         onDataDisposable.dispose();
         onResizeDisposable.dispose();
         invoke("close_terminal", { id }).catch(() => {});

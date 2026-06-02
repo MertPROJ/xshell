@@ -247,8 +247,8 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                       <input type="range" className="settings-range" min={100} max={700} step={100} value={terminalFontWeight} onChange={(e) => onSetTerminalFontWeight(parseInt(e.target.value, 10))} />
                       <span className="settings-zoom-value">{terminalFontWeight}</span>
                     </div>
-                    {terminalFontWeight !== 300 && (
-                      <button className="settings-reset-btn settings-reset-btn-block" onClick={() => onSetTerminalFontWeight(300)} {...ttProps(tt, "Reset to default")}><RotateCcw size={11} /> Reset</button>
+                    {terminalFontWeight !== 400 && (
+                      <button className="settings-reset-btn settings-reset-btn-block" onClick={() => onSetTerminalFontWeight(400)} {...ttProps(tt, "Reset to default")}><RotateCcw size={11} /> Reset</button>
                     )}
                   </div>
                 </SettingRow>

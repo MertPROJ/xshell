@@ -1,6 +1,24 @@
 /* ── xshell Design System ─────────────────────────────────────────── */
 /* Warm-toned dark theme with parchment-tinted neutrals.               */
 
+/* Bundled JetBrains Mono — the guaranteed terminal fallback so the render
+   doesn't depend on whatever monospace the OS happens to have. detectMonoFontFamily()
+   (src/lib/fonts.ts) prefers an installed Nerd Font first and lands here otherwise. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./assets/fonts/JetBrainsMono-Bold.woff2") format("woff2");
+}
+
 :root {
   /* Surfaces */
   --bg-deep: #141413;

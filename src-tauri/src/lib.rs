@@ -4,9 +4,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
-use std::time::SystemTime;
-use tauri::{AppHandle, Emitter, State};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
+use tauri::ipc::{Channel, Response};
+use tauri::State;
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -1518,8 +1520,18 @@ fn resolve_gitbash_path() -> Option<PathBuf> {
     None
 }
 
+// PTY transport tuning. The flusher coalesces a short window after the first
+// byte so a burst ships as one binary chunk; MAX_IDLE is just a wakeup safety net. The pending
+// buffer is capped so a frontend that stalls can't grow it unbounded — on overflow we discard
+// the backlog and inject a hard reset rather than slice a CSI sequence in half.
+const FLUSH_COALESCE: Duration = Duration::from_millis(4);
+const FLUSH_MAX_IDLE: Duration = Duration::from_millis(50);
+const READ_BUF: usize = 16 * 1024;
+const MAX_PENDING: usize = 4 * 1024 * 1024;
+const OVERFLOW_NOTICE: &[u8] = b"\x1bc\x1b[2m[xshell: dropped output due to backpressure]\x1b[0m\r\n";
+
 #[tauri::command]
-fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, session_id: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>, fullscreen_rendering: Option<bool>, force_sync_output: Option<bool>) -> Result<(), String> {
+fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>, fullscreen_rendering: Option<bool>, force_sync_output: Option<bool>, on_data: Channel<Response>, on_exit: Channel<i32>) -> Result<(), String> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| format!("Failed to open PTY: {}", e))?;
 
@@ -1644,26 +1656,68 @@ fn spawn_terminal(app: AppHandle, state: State<'_, AppState>, id: String, sessio
     let reader = pair.master.try_clone_reader().map_err(|e| format!("Failed to clone reader: {}", e))?;
     let writer = pair.master.take_writer().map_err(|e| format!("Failed to take writer: {}", e))?;
 
-    // Spawn reader thread that emits terminal output events
-    let terminal_id = id.clone();
-    let app_handle = app.clone();
+    // ── PTY → frontend transport ─────────────────────────────────────────
+    // Reader thread does blocking reads of large chunks and appends RAW BYTES to a shared
+    // buffer. A separate flusher coalesces a short window so a burst (e.g. a full TUI repaint)
+    // ships as ONE binary Channel message instead of many JSON events. The frontend feeds the
+    // bytes straight to xterm, which reassembles multibyte/escape sequences across chunk
+    // boundaries — so the renderer only ever sees whole frames (no partial-frame jitter), and
+    // we never split a CSI sequence or a UTF-8 codepoint the way per-4KB from_utf8_lossy did.
+    let pending: Arc<(Mutex<Vec<u8>>, Condvar)> = Arc::new((Mutex::new(Vec::with_capacity(READ_BUF)), Condvar::new()));
+    let done = Arc::new(AtomicBool::new(false));
+
+    let pending_r = pending.clone();
+    let done_r = done.clone();
     std::thread::spawn(move || {
         let mut reader = BufReader::new(reader);
-        let mut buf = [0u8; 4096];
+        let mut buf = [0u8; READ_BUF];
         loop {
             match reader.read(&mut buf) {
-                Ok(0) => {
-                    let _ = app_handle.emit(&format!("terminal-exit-{}", terminal_id), ());
-                    break;
-                }
+                Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let _ = app_handle.emit(&format!("terminal-output-{}", terminal_id), data);
+                    let (lock, cv) = &*pending_r;
+                    let mut g = lock.lock().unwrap();
+                    // Backpressure: discard the whole backlog (slicing it would corrupt xterm
+                    // mid-escape) and drop a hard reset + notice in its place.
+                    if g.len() + n > MAX_PENDING {
+                        g.clear();
+                        g.extend_from_slice(OVERFLOW_NOTICE);
+                    }
+                    g.extend_from_slice(&buf[..n]);
+                    cv.notify_one();
                 }
-                Err(_) => {
-                    let _ = app_handle.emit(&format!("terminal-exit-{}", terminal_id), ());
-                    break;
+            }
+        }
+        done_r.store(true, Ordering::Release);
+        pending_r.1.notify_one();
+    });
+
+    // Flusher: wait for data, coalesce a burst into one chunk, send as binary. When the reader
+    // has hit EOF and the buffer is fully drained, emit the exit signal — same thread, so the
+    // exit never races ahead of the final output chunk.
+    let pending_f = pending;
+    let done_f = done;
+    std::thread::spawn(move || {
+        let (lock, cv) = &*pending_f;
+        loop {
+            {
+                let mut g = lock.lock().unwrap();
+                while g.is_empty() {
+                    if done_f.load(Ordering::Acquire) {
+                        let _ = on_exit.send(0);
+                        return;
+                    }
+                    let (next, _) = cv.wait_timeout(g, FLUSH_MAX_IDLE).unwrap();
+                    g = next;
                 }
+            }
+            std::thread::sleep(FLUSH_COALESCE);
+            let chunk = std::mem::take(&mut *lock.lock().unwrap());
+            if chunk.is_empty() {
+                continue;
+            }
+            if on_data.send(Response::new(chunk)).is_err() {
+                break;
             }
         }
     });
