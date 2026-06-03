@@ -366,9 +366,15 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     });
     intersectionObserver.observe(containerRef.current);
 
-    // Right-click = paste clipboard into terminal (like Windows Terminal / gnome-terminal)
+    // Right-click = paste clipboard into terminal (like Windows Terminal / gnome-terminal).
+    // Claude Code handles right-click paste itself (it enables mouse reporting, so xterm
+    // forwards the click and Claude reads the clipboard — including images). Doing our own
+    // write_terminal too would paste twice, so we only paste manually for raw shells, which
+    // don't paste on right-click on their own. We still preventDefault everywhere to suppress
+    // the browser context menu.
     const onContextMenu = async (ev: MouseEvent) => {
       ev.preventDefault();
+      if ((tabRef.current.shellMode || "claude") === "claude") return;
       try {
         const text = await navigator.clipboard.readText();
         if (text) invoke("write_terminal", { id: tabRef.current.id, data: text }).catch(() => {});
