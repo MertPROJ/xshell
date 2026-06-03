@@ -423,8 +423,18 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
         invoke("write_terminal", { id, data }).catch(() => {});
       });
 
+      // Debounce the PTY resize (SIGWINCH). xterm reflows visually on every fit(), but Claude
+      // (Ink) does a FULL redraw on each SIGWINCH — so firing one per animation frame while the
+      // user drags the git-panel splitter or resizes the window causes a redraw storm. We let
+      // fit() reflow xterm live for instant feedback, but coalesce the actual PTY resize to a
+      // single call ~150ms after the drag settles.
+      let resizeTimer: number | undefined;
       const onResizeDisposable = term.onResize(({ cols, rows }) => {
-        invoke("resize_terminal", { id, cols, rows }).catch(() => {});
+        if (resizeTimer) window.clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(() => {
+          resizeTimer = undefined;
+          invoke("resize_terminal", { id, cols, rows }).catch(() => {});
+        }, 150);
       });
 
       try {
@@ -460,6 +470,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
         // close_terminal tears down the PTY (and thus the Rust side of the channel).
         onData.onmessage = () => {};
         onExit.onmessage = () => {};
+        if (resizeTimer) window.clearTimeout(resizeTimer);
         onDataDisposable.dispose();
         onResizeDisposable.dispose();
         invoke("close_terminal", { id }).catch(() => {});
