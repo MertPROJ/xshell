@@ -339,10 +339,14 @@ export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProj
         const defaultShellName = activeTabProject
           ? `Open ${defaultShell} in ${activeDisplayName}`
           : `Open ${defaultShell} in home`;
+        // The + button starts a new Claude Code session in the active project — the action that
+        // used to live only behind the chevron dropdown's "New chat in …". With no active project
+        // there's no cwd for a session, so it falls back to opening the default shell in home.
+        const newChatTip = activeTabProject ? `New chat in ${activeDisplayName}` : defaultShellName;
         const dropdownTip = activeTabProject ? "New chat · recent sessions · shells" : "New shell";
         return (
           <div className="tab-actions">
-            <button className="tab-action-btn" onClick={onNewShellInContext} onMouseEnter={(e) => showTooltip(defaultShellName, e.currentTarget)} onMouseLeave={hideTooltip}>
+            <button className="tab-action-btn" onClick={() => (activeTabProject ? onNewChatInActive() : onNewShellInContext())} onMouseEnter={(e) => showTooltip(newChatTip, e.currentTarget)} onMouseLeave={hideTooltip}>
               <Plus size={12} />
             </button>
             <button className={`tab-action-btn ${dropdown ? "active" : ""}`} onClick={(e) => { const el = e.currentTarget as HTMLElement; setDropdown(prev => prev ? null : { rect: el.getBoundingClientRect(), el }); }} onMouseEnter={(e) => showTooltip(dropdownTip, e.currentTarget)} onMouseLeave={hideTooltip}>
