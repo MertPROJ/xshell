@@ -5,6 +5,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { GitBranch, ArrowUp, ArrowDown, RefreshCw, ChevronRight, ChevronDown, Plus, Minus, History, GitFork, Pencil, X as XIcon, Check, Search, AlertTriangle, Cloud } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { detectMonoFontFamily, ensureMonoFontsLoaded } from "../lib/fonts";
@@ -275,6 +276,14 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(new WebLinksAddon());
+
+    // Unicode 11 width tables. xterm defaults to Unicode v6, which gets the cell width of
+    // emoji and many wide chars wrong (status-line icons like 📁, box drawing, CJK) — so text
+    // after them shifts and TUI layouts misalign. Activating v11 makes widths correct, which
+    // is exactly what Claude Code's emoji/glyph-heavy UI needs. Set before the first fit so
+    // column math uses the right widths.
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
 
     term.open(containerRef.current);
     terminalRef.current = term;
