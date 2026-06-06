@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { Plus, Settings, ChevronLeft, Folder as FolderIcon } from "lucide-react";
+import { Plus, Folder as FolderIcon } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectImage } from "../hooks/useProjectImage";
 import { FolderEditorDialog } from "./FolderEditorDialog";
@@ -152,7 +152,6 @@ export function Sidebar({ projects, projectIcons, selectedProject, activeCountBy
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const isHomeActive = activeTabId === "home" && !selectedProject;
   const isInTerminal = activeTabId !== "home" && activeTabId !== "settings";
-  const isSettingsActive = activeTabId === "settings";
 
   const projectsByPath = useMemo(() => {
     const m = new Map<string, ProjectInfo>();
@@ -458,10 +457,6 @@ export function Sidebar({ projects, projectIcons, selectedProject, activeCountBy
   return (
     <>
       <div className="discord-sidebar">
-        <div className="ds-item ds-collapse" onClick={onCollapse} onMouseEnter={(e) => showTooltip("Collapse sidebar", e.currentTarget)} onMouseLeave={hideTooltip}>
-          <div className="ds-icon ds-collapse-icon"><ChevronLeft size={16} /></div>
-        </div>
-
         <div className={`ds-item ${isHomeActive ? "active" : ""}`} onClick={onGoHome} onMouseEnter={(e) => showTooltip("Home", e.currentTarget)} onMouseLeave={hideTooltip}>
           <div className="ds-icon ds-home"><img className="ds-home-logo" src={logo} alt="" /></div>
           <div className="ds-indicator" />
@@ -532,19 +527,11 @@ export function Sidebar({ projects, projectIcons, selectedProject, activeCountBy
           </div>
         </div>
 
-        <div className="ds-separator" />
-
         {/* Account-wide rate-limit chip (5h / 7d window). Sourced from the freshest
             xshell-stats file across all sessions — same number Claude Code shows on its
             statusline. Hidden until the statusline hook is configured AND the user has
-            this on in Settings. */}
-        {showRateLimit && <RateLimitIndicator />}
-
-        <div className={`ds-item ${isSettingsActive ? "active" : ""}`} onClick={onOpenSettings} onMouseEnter={(e) => showTooltip(updateAvailable ? "Settings — update available" : "Settings", e.currentTarget)} onMouseLeave={hideTooltip}>
-          <div className="ds-icon ds-settings"><Settings size={16} /></div>
-          {updateAvailable && <div className="ds-settings-update-badge" title="Update available">+1</div>}
-          <div className="ds-indicator" />
-        </div>
+            this on in Settings. Settings itself now lives in the top bar. */}
+        {showRateLimit && <><div className="ds-separator" /><RateLimitIndicator /></>}
       </div>
 
       {/* Floating ghost that follows the cursor during drag — positioned via direct DOM
