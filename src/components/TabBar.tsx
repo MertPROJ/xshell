@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useLayoutEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { X, Minus, Square, X as XIcon, Plus, ChevronDown, ChevronLeft, ChevronRight, Terminal as TerminalIcon, Command } from "lucide-react";
+import { X, Minus, Square, X as XIcon, Plus, ChevronDown, ChevronLeft, ChevronRight, Terminal as TerminalIcon, Command, Settings } from "lucide-react";
 import { ShellIcon } from "./ShellIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { timeAgo, processSessions } from "../utils";
@@ -11,6 +11,23 @@ import { Layers } from "lucide-react";
 import { useDragReorder } from "../hooks/useDragReorder";
 import { QuickActionsDialog } from "./QuickActionsDialog";
 import { ClaudeChatIcon } from "./ClaudeChatIcon";
+import { useProjectImage } from "../hooks/useProjectImage";
+
+function tabInitials(name: string): string {
+  const parts = name.replace(/[^a-zA-Z0-9\s\-_.]/g, "").split(/[\s\-_.]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
+
+// A small version of the sidebar's project icon, sized for a tab. Shows the project image when set,
+// otherwise an emoji / initials over the project's custom color. `linked` adds the ring that the old
+// status dot used to convey (this tab's project is the one currently hovered/selected/linked).
+function TabProjectIcon({ iconValue, color, name, linked }: { iconValue?: string; color?: string; name: string; linked: boolean }) {
+  const imgSrc = useProjectImage(iconValue);
+  const cls = `tab-project-icon ${linked ? "tab-project-icon-linked" : ""}`;
+  if (imgSrc) return <div className={cls}><img src={imgSrc} className="tab-project-img" alt="" /></div>;
+  return <div className={cls} style={color ? { background: color } : undefined}>{iconValue || tabInitials(name)}</div>;
+}
 
 // Tab bar shows tabs and groups interleaved. A group is one "entry" representing
 // its bundled tabs; the individual tabs inside it don't appear standalone.
@@ -30,6 +47,7 @@ interface TabBarProps {
   pinnedProjects: ProjectInfo[];
   sidebarCollapsed: boolean;
   defaultShell: string;
+  updateAvailable: boolean;
   onExpandSidebar: () => void;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
@@ -155,7 +173,7 @@ function TabTooltip({ text, rect }: { text: string; rect: DOMRect }) {
   return <div className="tab-tooltip" ref={ref} style={style}>{text}</div>;
 }
 
-export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProject, hoveredProjectPath, linkedProjectPath, activeTabProject, openSessionIds, projectIcons, pinnedProjects, sidebarCollapsed, defaultShell, onExpandSidebar, onSelectTab, onCloseTab, onReorderTabs, onNewChat, onNewChatInActive, onNewShellInContext, onOpenSession, onNewShell, onRenameGroup, onGoHome, onOpenSettings, onToggleSidebar }: TabBarProps) {
+export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProject, hoveredProjectPath, linkedProjectPath, activeTabProject, openSessionIds, projectIcons, pinnedProjects, sidebarCollapsed, defaultShell, updateAvailable, onExpandSidebar, onSelectTab, onCloseTab, onReorderTabs, onNewChat, onNewChatInActive, onNewShellInContext, onOpenSession, onNewShell, onRenameGroup, onGoHome, onOpenSettings, onToggleSidebar }: TabBarProps) {
   const appWindow = getCurrentWindow();
   const highlightPath = hoveredProjectPath || linkedProjectPath || selectedProject?.path || null;
   const [dropdown, setDropdown] = useState<{ rect: DOMRect; el: HTMLElement } | null>(null);
@@ -264,8 +282,8 @@ export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProj
 
   return (
     <div className="tab-bar">
-      <button className={`tb-expand-sidebar ${sidebarCollapsed ? "show" : ""}`} onClick={onExpandSidebar} onMouseEnter={(e) => showTooltip("Show sidebar", e.currentTarget)} onMouseLeave={hideTooltip} tabIndex={sidebarCollapsed ? 0 : -1} aria-hidden={!sidebarCollapsed}>
-        <ChevronRight size={13} />
+      <button className="tb-sidebar-toggle" onClick={onToggleSidebar} onMouseEnter={(e) => showTooltip(sidebarCollapsed ? "Show sidebar" : "Hide sidebar", e.currentTarget)} onMouseLeave={hideTooltip} aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}>
+        {sidebarCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
       </button>
       <div className="tab-bar-scroll-wrapper">
         {overflow.left && (
@@ -305,7 +323,8 @@ export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProj
             const tab = entry.tab;
             const matches = highlightPath && tab.projectPath && tab.projectPath.toLowerCase() === highlightPath.toLowerCase();
             const isClosing = closingTabIds.has(tab.id);
-            const customName = tab.projectPath ? projectIcons[tab.projectPath.toLowerCase()]?.customName : undefined;
+            const projectSettings = tab.projectPath ? projectIcons[tab.projectPath.toLowerCase()] : undefined;
+            const customName = projectSettings?.customName;
             const projectDisplayName = customName || tab.projectName || "";
             const isRawShell = tab.shellMode === "raw";
             const displayTitle = isRawShell ? (projectDisplayName || tab.title) : tab.title;
@@ -316,7 +335,9 @@ export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProj
                 {showDropBefore && <div className="tab-drop-line tab-drop-line-before" />}
                 {isRawShell
                   ? <ShellIcon id={tab.shellId} size={14} className="tab-shell-icon" />
-                  : <div className={`tab-dot ${matches ? "tab-dot-active" : ""}`} />}
+                  : projectDisplayName
+                    ? <TabProjectIcon iconValue={projectSettings?.icon} color={projectSettings?.color} name={projectDisplayName} linked={!!matches} />
+                    : <div className={`tab-dot ${matches ? "tab-dot-active" : ""}`} />}
                 <div className="tab-item-text">
                   <span className="tab-item-title truncate">{displayTitle}</span>
                   {displaySubtitle && <span className="tab-item-project">{displaySubtitle}</span>}
@@ -361,6 +382,11 @@ export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProj
       <button className={`tb-search-btn ${searchOpen ? "active" : ""}`} onClick={() => setSearchOpen(v => !v)} onMouseEnter={(e) => showTooltip(`Quick Actions (${shortcutLabel})`, e.currentTarget)} onMouseLeave={hideTooltip} aria-label="Quick Actions">
         <Command size={13} />
         <span className="tb-search-kbd">{shortcutLabel}</span>
+      </button>
+
+      <button className={`tb-settings-btn ${activeTabId === "settings" ? "active" : ""}`} onClick={onOpenSettings} onMouseEnter={(e) => showTooltip(updateAvailable ? "Settings — update available" : "Settings", e.currentTarget)} onMouseLeave={hideTooltip} aria-label="Settings">
+        <Settings size={15} />
+        {updateAvailable && <span className="tb-settings-badge" title="Update available">+1</span>}
       </button>
 
       <div className="window-controls">

@@ -119,7 +119,9 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 
 /* ── App Layout ───────────────────────────────────────────────────── */
 
-.app-layout { display: flex; height: 100%; overflow: hidden; }
+/* Column shell: full-width top bar on top, then the body row (sidebar + content) underneath. */
+.app-layout { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.app-body { flex: 1; display: flex; min-height: 0; overflow: hidden; }
 
 /* ── Discord-style Sidebar ─────────────────────────────────────────── */
 
@@ -145,12 +147,6 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 
 .ds-project-img { width: 100%; height: 100%; object-fit: cover; border-radius: 14px; -webkit-user-drag: none; user-select: none; pointer-events: none; }
 
-.ds-settings { background: var(--bg-card); color: var(--icon-bright); width: 36px; height: 36px; border-radius: 10px; }
-.ds-item:hover .ds-settings { background: var(--bg-active); color: var(--text-secondary); }
-.ds-item.active .ds-settings { background: var(--accent-terracotta); color: var(--text-primary); }
-.ds-collapse-icon { background: transparent; color: var(--icon-bright); width: 36px; height: 24px; border-radius: 8px; }
-.ds-item:hover .ds-collapse-icon { background: var(--bg-hover); color: var(--text-primary); }
-.ds-collapse { margin-bottom: 2px; }
 
 .ds-indicator { position: absolute; left: 0; top: 50%; width: 3px; height: 0; background: var(--text-primary); border-radius: 0 3px 3px 0; transform: translateY(-50%); transition: all 0.2s cubic-bezier(0.2, 0, 0, 1); }
 .ds-item:hover .ds-indicator { height: 16px; }
@@ -172,7 +168,6 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .ds-active-badge { position: absolute; bottom: 0; right: calc(50% - 21px); min-width: 18px; height: 18px; background: var(--success); color: #fff; font-size: 10px; font-weight: 700; border-radius: 9px; display: flex; align-items: center; justify-content: center; border: 2px solid var(--bg-surface); padding: 0 5px; z-index: 2; box-shadow: 0 1px 3px rgba(0,0,0,0.3); pointer-events: none; }
 /* Settings cog "update available" pill — same shape as .ds-active-badge but red and anchored
    to the top-right of the icon so it doesn't collide with the .ds-indicator on the left. */
-.ds-settings-update-badge { position: absolute; top: -2px; right: calc(50% - 22px); min-width: 18px; height: 16px; background: #e5484d; color: #fff; font-size: 9px; font-weight: 700; border-radius: 8px; display: flex; align-items: center; justify-content: center; border: 2px solid var(--bg-surface); padding: 0 5px; z-index: 2; box-shadow: 0 1px 3px rgba(0,0,0,0.4); pointer-events: none; letter-spacing: 0.2px; }
 .ds-dragging { opacity: 0.3; transform: scale(0.92); }
 .ds-drop-line { position: absolute; left: 12px; right: 12px; height: 2px; background: var(--accent-terracotta); border-radius: 1px; pointer-events: none; box-shadow: 0 0 6px var(--accent-terracotta); }
 .ds-drop-line-before { top: -1px; }
@@ -258,20 +253,22 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 
 /* ── Tab Bar / Title Bar ──────────────────────────────────────────── */
 
+/* Flat bar in the base surface colour. The active tab sits on it as a slightly lighter raised card. */
 .tab-bar { height: var(--tab-height); background: var(--bg-surface); border-bottom: 1px solid var(--border-subtle); display: flex; align-items: stretch; flex-shrink: 0; }
 
-/* Expand-sidebar button (appears when sidebar is collapsed) */
-.tb-expand-sidebar { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 0; padding: 0; background: transparent; border: none; color: var(--text-muted); cursor: pointer; opacity: 0; overflow: hidden; transition: width 0.26s cubic-bezier(.4, 0, .2, 1), opacity 0.2s ease, color 0.12s, background 0.12s; }
-.tb-expand-sidebar.show { width: 30px; opacity: 1; }
-.tb-expand-sidebar:hover { background: var(--bg-hover); color: var(--text-primary); }
-.tb-expand-sidebar svg { transition: transform 0.18s; }
-.tb-expand-sidebar:hover svg { transform: translateX(1px); }
+/* Sidebar collapse/expand toggle — a plain, compact button in the bar, independent of the sidebar.
+   No divider; it flows straight into the tabs as one continuous bar. */
+.tb-sidebar-toggle { flex-shrink: 0; align-self: center; display: flex; align-items: center; justify-content: center; width: 28px; height: 24px; margin: 0 2px 0 6px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer; transition: color 0.12s, background 0.12s; }
+.tb-sidebar-toggle:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.06); }
+.tb-sidebar-toggle svg { transition: transform 0.18s; }
+.tb-sidebar-toggle:hover svg { transform: translateX(-1px); }
+.app-layout.sidebar-collapsed .tb-sidebar-toggle:hover svg { transform: translateX(1px); }
 
 /* Wrapper holds the scroll buttons + scrollable tabs area */
 .tab-bar-scroll-wrapper { position: relative; display: flex; align-items: stretch; flex: 0 1 auto; min-width: 0; }
 
 /* The scrollable tabs container: shrinks as needed, scrolls when tabs hit min-width */
-.tab-bar-tabs { display: flex; align-items: stretch; gap: 1px; padding: 0 4px; overflow-x: auto; overflow-y: hidden; min-width: 0; scrollbar-width: none; }
+.tab-bar-tabs { display: flex; align-items: stretch; gap: 1px; padding: 0 4px 0 2px; overflow-x: auto; overflow-y: hidden; min-width: 0; scrollbar-width: none; }
 .tab-bar-tabs::-webkit-scrollbar { height: 0; width: 0; display: none; }
 
 /* Scroll arrow buttons (appear only when tabs overflow) */
@@ -285,9 +282,18 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-terracotta); flex-shrink: 0; transition: background 0.15s ease; }
 .tab-dot-active { background: var(--success); }
 
-.tab-item { display: flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 11px; color: var(--text-tertiary); cursor: pointer; border-bottom: 2px solid transparent; transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease, max-width 0.18s ease, opacity 0.18s ease, padding 0.18s ease; white-space: nowrap; flex: 1 1 auto; min-width: 100px; max-width: 220px; overflow: hidden; animation: tabIn 0.18s cubic-bezier(0.2, 0, 0, 1); }
-.tab-item:hover { color: var(--text-secondary); background: var(--bg-hover); }
-.tab-item.active { color: var(--text-primary); border-bottom-color: var(--accent-terracotta); }
+/* Mini project icon (mirrors the sidebar's .ds-project, shrunk to fit a tab). Replaces the status dot. */
+.tab-project-icon { width: 16px; height: 16px; border-radius: 5px; background: var(--bg-card); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: var(--text-tertiary); letter-spacing: 0; line-height: 1; overflow: hidden; user-select: none; transition: box-shadow 0.15s ease; }
+.tab-project-img { width: 100%; height: 100%; object-fit: cover; border-radius: 5px; -webkit-user-drag: none; user-select: none; pointer-events: none; }
+.tab-project-icon-linked { box-shadow: 0 0 0 1.5px var(--bg-surface), 0 0 0 3px var(--success); }
+
+/* A transparent top+side border on every tab (open at the bottom, like a real tab) keeps layout stable;
+   the active tab simply colours it in, which outlines its rounded shape crisply against the bar. */
+.tab-item { display: flex; align-items: center; gap: 6px; padding: 4px 10px; margin-top: 4px; font-size: 11px; color: var(--text-tertiary); cursor: pointer; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease, max-width 0.18s ease, opacity 0.18s ease, padding 0.18s ease; white-space: nowrap; flex: 1 1 auto; min-width: 100px; max-width: 220px; overflow: hidden; animation: tabIn 0.18s cubic-bezier(0.2, 0, 0, 1); }
+.tab-item:hover { color: var(--text-secondary); background: rgba(255, 255, 255, 0.04); }
+/* Active tab = darker fill (opens into the content) + a hairline outline so its rounded shape stays legible against the bar. */
+.tab-item.active { color: var(--text-primary); background: var(--bg-deep); border-color: var(--border-strong); }
+.tab-item.active:hover { background: var(--bg-deep); }
 .tab-closing { max-width: 0 !important; min-width: 0 !important; padding-left: 0 !important; padding-right: 0 !important; opacity: 0; pointer-events: none; flex: 0 0 0 !important; }
 
 @keyframes tabIn { from { max-width: 0; min-width: 0; opacity: 0; padding-left: 0; padding-right: 0; } to { max-width: 220px; opacity: 1; } }
@@ -303,9 +309,11 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .tab-drop-line-after { right: -2px; }
 .tab-item.tab-dragging { opacity: 0.55; }
 
-.tab-item-close { width: 16px; height: 16px; border-radius: 3px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: all 0.1s; margin-left: 3px; }
-.tab-item:hover .tab-item-close { opacity: 0.5; }
-.tab-item-close:hover { opacity: 1 !important; background: var(--bg-active); }
+/* Close button reserves no layout space — it's anchored to the tab's right edge and fades in on hover.
+   No backdrop by default (avoids a mismatched fade); it only gets a chip background on direct hover. */
+.tab-item-close { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); width: 17px; height: 17px; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); background: transparent; opacity: 0; transition: opacity 0.1s, background 0.1s, color 0.1s; }
+.tab-item:hover .tab-item-close { opacity: 0.85; }
+.tab-item-close:hover { opacity: 1 !important; background: var(--bg-active); color: var(--text-primary); }
 
 /* Small thin tooltip for tabs */
 .tab-tooltip { position: fixed; transform: translateX(-50%); background: var(--bg-deep); color: var(--text-secondary); font-size: 10px; font-weight: 400; padding: 3px 7px; border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none; z-index: 2500; border: 1px solid var(--border-default); animation: fadeIn 0.12s ease; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
@@ -364,6 +372,12 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .tb-search-btn.active { background: var(--bg-active); color: var(--text-primary); }
 .tb-search-kbd { font-family: var(--font-mono); font-size: 9px; font-weight: 500; line-height: 1; letter-spacing: 0.3px; color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 3px 6px; user-select: none; }
 .tb-search-btn:hover .tb-search-kbd, .tb-search-btn.active .tb-search-kbd { color: var(--text-secondary); border-color: var(--border-default); }
+
+/* Settings button — moved out of the sidebar; sits between Quick Actions and the window controls. */
+.tb-settings-btn { position: relative; display: flex; align-items: center; justify-content: center; width: 38px; border: none; background: transparent; color: var(--text-tertiary); cursor: pointer; transition: all 0.1s; flex-shrink: 0; }
+.tb-settings-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tb-settings-btn.active { background: var(--bg-active); color: var(--text-primary); }
+.tb-settings-badge { position: absolute; top: 6px; right: 3px; min-width: 14px; height: 13px; padding: 0 3px; background: #e5484d; color: #fff; font-size: 8px; font-weight: 700; line-height: 13px; text-align: center; border-radius: 7px; pointer-events: none; }
 
 /* ── Tab Search Dialog ────────────────────────────────────────────── */
 .ts-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: flex-start; justify-content: center; padding-top: 18vh; z-index: 3000; animation: fadeIn 0.12s ease; }
@@ -553,10 +567,13 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 
 .terminal-header { padding: 6px 12px; background: var(--bg-surface); border-bottom: 1px solid var(--border-subtle); display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
 .terminal-header-path { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.terminal-header-label { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: var(--accent-terracotta-dim); border: 1px solid var(--accent-terracotta); border-radius: 10px; flex-shrink: 0; }
+/* Header badge is neutral by default; it turns orange only when its pane is the focused leaf. */
+.terminal-header-label { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 10px; flex-shrink: 0; transition: background 0.12s, border-color 0.12s; }
 .terminal-header-project { font-size: 10px; font-weight: 600; color: var(--text-primary); }
-.terminal-header-title { font-size: 10px; color: var(--accent-coral); }
+.terminal-header-title { font-size: 10px; color: var(--text-secondary); transition: color 0.12s; }
 .terminal-header-sep { color: var(--text-muted); font-size: 10px; }
+.group-pane-active .terminal-header-label { background: var(--accent-terracotta-dim); border-color: var(--accent-terracotta); }
+.group-pane-active .terminal-header-title { color: var(--accent-coral); }
 
 .terminal-body { flex: 1; display: flex; flex-direction: row; overflow: hidden; min-height: 0; }
 .terminal-container { flex: 1; padding: 4px; background: var(--bg-surface); overflow: hidden; min-width: 0; position: relative; }
@@ -1284,8 +1301,8 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 
 /* A leaf pane inside a group (or a standalone tab). The data-group-leaf attr is what
    the drop-zone detector uses to find targets. */
-.group-pane { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; display: flex; overflow: hidden; border: 1px solid transparent; transition: border-color 0.12s; }
-.group-pane-active { border-color: var(--accent-terracotta); }
+.group-pane { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; display: flex; overflow: hidden; }
+/* Focus is no longer shown with a pane border — the focused pane's header badge turns orange instead (see .group-pane-active .terminal-header-label). */
 .group-pane-close { position: absolute; top: 5px; right: 5px; width: 20px; height: 20px; background: rgba(0,0,0,0.55); color: #fff; border: 1px solid var(--border-default); border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; z-index: 10; opacity: 0; transition: opacity 0.12s, background 0.12s, border-color 0.12s; }
 .group-pane:hover .group-pane-close { opacity: 0.85; }
 .group-pane-close:hover { opacity: 1 !important; background: var(--error); border-color: var(--error); }
