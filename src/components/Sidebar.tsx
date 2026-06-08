@@ -500,7 +500,7 @@ export function Sidebar({ projects, projectIcons, selectedProject, activeCountBy
                   {folder.collapsed ? (
                     <FolderMiniGrid paths={folder.projectPaths} projectIcons={projectIcons} projects={projects} />
                   ) : (
-                    <div className="ds-folder-open-icon"><FolderIcon size={20} /></div>
+                    <div className="ds-folder-open-icon"><FolderIcon size={18} /></div>
                   )}
                   {/* Rollup count only shown when collapsed — when the folder is open, each
                       contained project already shows its own badge, so this would be noise. */}
@@ -523,7 +523,7 @@ export function Sidebar({ projects, projectIcons, selectedProject, activeCountBy
             <div className="ds-drop-line ds-drop-line-standalone" />
           )}
           <div className="ds-item" onClick={onAddProject} onMouseEnter={(e) => showTooltip("Add Project", e.currentTarget)} onMouseLeave={hideTooltip}>
-            <div className="ds-icon ds-add"><Plus size={18} /></div>
+            <div className="ds-icon ds-add"><Plus size={16} /></div>
           </div>
         </div>
 
