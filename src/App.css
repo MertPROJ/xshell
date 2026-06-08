@@ -55,7 +55,7 @@
   --success: #23a55a;
 
   /* Spacing */
-  --ds-width: 64px;
+  --ds-width: 56px;
   --tab-height: 40px;
 
   /* Typography */
@@ -125,12 +125,12 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 
 /* ── Discord-style Sidebar ─────────────────────────────────────────── */
 
-.discord-sidebar { width: var(--ds-width); background: var(--bg-surface); border-right: 1px solid var(--border-subtle); display: flex; flex-direction: column; align-items: center; padding: 10px 0; gap: 2px; flex-shrink: 0; transition: margin-left 0.28s cubic-bezier(.4, 0, .2, 1), transform 0.28s cubic-bezier(.4, 0, .2, 1), opacity 0.22s ease; }
+.discord-sidebar { width: var(--ds-width); background: var(--bg-surface); border-right: 1px solid var(--border-subtle); display: flex; flex-direction: column; align-items: center; padding: 9px 0; gap: 2px; flex-shrink: 0; transition: margin-left 0.28s cubic-bezier(.4, 0, .2, 1), transform 0.28s cubic-bezier(.4, 0, .2, 1), opacity 0.22s ease; }
 .app-layout.sidebar-collapsed .discord-sidebar { margin-left: calc(-1 * var(--ds-width)); transform: translateX(-12px); opacity: 0; pointer-events: none; }
 
 .ds-item { position: relative; width: 100%; display: flex; align-items: center; justify-content: center; padding: 3px 0; cursor: pointer; }
 
-.ds-icon { width: 42px; height: 42px; border-radius: 14px; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease; color: var(--text-tertiary); font-size: 12px; font-weight: 600; font-family: var(--font-sans); letter-spacing: -0.3px; user-select: none; }
+.ds-icon { width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease; color: var(--text-tertiary); font-size: 11px; font-weight: 600; font-family: var(--font-sans); letter-spacing: -0.3px; user-select: none; }
 
 /* Home button is just the logo image, no state colors. The image carries the brand on
    its own — switching the bg to terracotta on hover/active was leaking through the rounded
@@ -145,14 +145,14 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .ds-add { background: var(--bg-card); color: var(--icon-bright); }
 .ds-item:hover .ds-add { background: var(--accent-terracotta-dim); color: var(--accent-coral); }
 
-.ds-project-img { width: 100%; height: 100%; object-fit: cover; border-radius: 14px; -webkit-user-drag: none; user-select: none; pointer-events: none; }
+.ds-project-img { width: 100%; height: 100%; object-fit: cover; border-radius: 12px; -webkit-user-drag: none; user-select: none; pointer-events: none; }
 
 
 .ds-indicator { position: absolute; left: 0; top: 50%; width: 3px; height: 0; background: var(--text-primary); border-radius: 0 3px 3px 0; transform: translateY(-50%); transition: all 0.2s cubic-bezier(0.2, 0, 0, 1); }
 .ds-item:hover .ds-indicator { height: 16px; }
 .ds-item.active .ds-indicator { height: 32px; }
 .ds-item.linked .ds-indicator { height: 32px; background: var(--success); }
-.ds-item.linked .ds-project { border-radius: 14px; color: var(--text-primary); }
+.ds-item.linked .ds-project { border-radius: 12px; color: var(--text-primary); }
 
 /* Discord-style tooltip (fixed position, rendered outside scroll) */
 .ds-tooltip-fixed { position: fixed; transform: translateY(-50%); background: var(--bg-deep); color: var(--text-primary); font-size: 13px; font-weight: 500; padding: 6px 12px; border-radius: var(--radius-md); white-space: nowrap; pointer-events: none; z-index: 3000; box-shadow: 0 4px 12px rgba(0,0,0,0.4); border: 1px solid var(--border-default); animation: tooltipIn 0.12s ease; }
@@ -165,7 +165,7 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 
 /* Active-session badge (Discord-style) — anchored to the icon's right edge (not the item's),
    so it sits correctly whether the item is top-level or inside a narrower folder bubble. */
-.ds-active-badge { position: absolute; bottom: 0; right: calc(50% - 21px); min-width: 18px; height: 18px; background: var(--success); color: #fff; font-size: 10px; font-weight: 700; border-radius: 9px; display: flex; align-items: center; justify-content: center; border: 2px solid var(--bg-surface); padding: 0 5px; z-index: 2; box-shadow: 0 1px 3px rgba(0,0,0,0.3); pointer-events: none; }
+.ds-active-badge { position: absolute; bottom: 0; right: calc(50% - 19px); min-width: 16px; height: 16px; background: var(--success); color: #fff; font-size: 9px; font-weight: 700; border-radius: 8px; display: flex; align-items: center; justify-content: center; border: 2px solid var(--bg-surface); padding: 0 4px; z-index: 2; box-shadow: 0 1px 3px rgba(0,0,0,0.3); pointer-events: none; }
 /* Settings cog "update available" pill — same shape as .ds-active-badge but red and anchored
    to the top-right of the icon so it doesn't collide with the .ds-indicator on the left. */
 .ds-dragging { opacity: 0.3; transform: scale(0.92); }
@@ -173,7 +173,7 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .ds-drop-line-before { top: -1px; }
 .ds-drop-line-after { bottom: -1px; }
 
-.ds-separator { width: 28px; height: 2px; background: var(--border-default); border-radius: 1px; margin: 3px 0; flex-shrink: 0; }
+.ds-separator { width: 24px; height: 2px; background: var(--border-default); border-radius: 1px; margin: 3px 0; flex-shrink: 0; }
 
 /* gap: 0 is deliberate — any spacing between items must be INSIDE an item's box (padding)
    or INSIDE a folder's padding so the pointer always hits a data-drop-kind element.
@@ -192,7 +192,7 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 
 /* The single dark bubble: 42×42 rounded square, dark background, mini-grid inside when
    collapsed / folder icon when expanded. Same look in both states. */
-.ds-folder-header { position: relative; width: 42px; height: 42px; margin: 0 auto; border-radius: 14px; background: var(--bg-deep); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.15s, transform 0.15s; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+.ds-folder-header { position: relative; width: 38px; height: 38px; margin: 0 auto; border-radius: 12px; background: var(--bg-deep); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.15s, transform 0.15s; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
 .ds-folder-header:hover { background: var(--bg-active); }
 
 /* Merge highlight — a glowing ring around the icon, NOT a rectangle around the item.
@@ -202,10 +202,10 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 
 /* Expanded folder as merge target: since there's no visible bubble at rest, show one just
    for this interaction — subtle terracotta tint + ring around the whole folder area. */
-.ds-folder.ds-folder-merge-target { background: color-mix(in oklab, var(--accent-terracotta) 10%, transparent); border-radius: 18px; box-shadow: 0 0 0 2px var(--accent-terracotta), 0 0 12px rgba(201, 100, 66, 0.35) inset; }
+.ds-folder.ds-folder-merge-target { background: color-mix(in oklab, var(--accent-terracotta) 10%, transparent); border-radius: 16px; box-shadow: 0 0 0 2px var(--accent-terracotta), 0 0 12px rgba(201, 100, 66, 0.35) inset; }
 
-.ds-folder-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 2px; width: 34px; height: 34px; }
-.ds-icon-mini { width: 16px; height: 16px; border-radius: 5px; background: var(--bg-card); display: flex; align-items: center; justify-content: center; font-size: 7px; font-weight: 700; color: var(--text-tertiary); overflow: hidden; letter-spacing: 0; }
+.ds-folder-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 2px; width: 30px; height: 30px; }
+.ds-icon-mini { width: 14px; height: 14px; border-radius: 5px; background: var(--bg-card); display: flex; align-items: center; justify-content: center; font-size: 6px; font-weight: 700; color: var(--text-tertiary); overflow: hidden; letter-spacing: 0; }
 .ds-icon-mini .ds-project-img { border-radius: 5px; }
 .ds-icon-mini-empty { background: transparent; }
 
@@ -224,7 +224,7 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
    it appears when the folder opens, disappears when it closes. */
 .ds-folder-body-wrap { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 0.28s cubic-bezier(.4, 0, .2, 1); width: 100%; }
 .ds-folder-body-wrap.collapsed { grid-template-rows: 0fr; }
-.ds-folder-open .ds-folder-body-wrap { background: var(--bg-deep); margin: 2px 6px 0; border-radius: 14px; width: calc(100% - 12px); }
+.ds-folder-open .ds-folder-body-wrap { background: var(--bg-deep); margin: 2px 6px 0; border-radius: 12px; width: calc(100% - 12px); }
 /* min-height: 0 is critical — grid items default to min-height: auto, which refuses to
    shrink below content size, which means `grid-template-rows: 0fr` would be silently
    ignored and children (a 48px project row) would stay visible as a "line" under the
@@ -240,8 +240,8 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .ds-folder-open .ds-folder-body .ds-item .ds-indicator { left: -6px; }
 
 /* Standalone drop indicator shown at the very bottom (end-of-list insert). */
-.ds-drop-line-standalone { width: 34px; height: 3px; margin: 2px auto; background: var(--accent-terracotta); border-radius: 2px; box-shadow: 0 0 6px var(--accent-terracotta); }
-.ds-drop-line-folder { position: static; width: 34px; margin: 2px auto; }
+.ds-drop-line-standalone { width: 32px; height: 3px; margin: 2px auto; background: var(--accent-terracotta); border-radius: 2px; box-shadow: 0 0 6px var(--accent-terracotta); }
+.ds-drop-line-folder { position: static; width: 32px; margin: 2px auto; }
 
 /* Floating drag ghost — positioned via transform (updated directly in the pointermove
    handler, not via React state) so the background stays visible and nothing flickers. */
