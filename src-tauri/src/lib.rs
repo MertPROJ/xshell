@@ -441,7 +441,25 @@ fn codex_rollout_files() -> Vec<std::path::PathBuf> {
     files
 }
 
-fn parse_codex_session(path: &std::path::Path) -> Option<SessionInfo> {
+// User-assigned session names (Codex's rename feature) don't live in the rollout files —
+// they land in ~/.codex/session_index.jsonl, one JSON line per named session. Load once
+// per listing call and overlay onto parsed sessions; for repeated renames of the same id
+// the last line wins (insertion order preserves that).
+fn codex_session_names() -> HashMap<String, String> {
+    let mut names = HashMap::new();
+    let Some(home) = dirs::home_dir() else { return names };
+    let Ok(content) = fs::read_to_string(home.join(".codex").join("session_index.jsonl")) else { return names };
+    for line in content.lines() {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+            if let (Some(id), Some(name)) = (json.get("id").and_then(|v| v.as_str()), json.get("thread_name").and_then(|v| v.as_str())) {
+                if !name.trim().is_empty() { names.insert(id.to_string(), name.to_string()); }
+            }
+        }
+    }
+    names
+}
+
+fn parse_codex_session(path: &std::path::Path, names: &HashMap<String, String>) -> Option<SessionInfo> {
     let content = fs::read_to_string(path).ok()?;
 
     let mut session_id = String::new();
@@ -518,7 +536,10 @@ fn parse_codex_session(path: &std::path::Path) -> Option<SessionInfo> {
     if session_id.is_empty() || cwd.is_empty() { return None; }
     let timestamp = if last_ts.is_empty() { fs::metadata(path).ok().and_then(|m| m.modified().ok()).map(system_time_to_iso).unwrap_or_default() } else { last_ts };
     let project_name = std::path::Path::new(&cwd).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| cwd.clone());
-    let title = if first_user_message.is_empty() { format!("Session {}", &session_id[..8.min(session_id.len())]) } else { first_user_message };
+    // Title precedence mirrors the Claude side: user rename > first prompt > bare id.
+    let title = if let Some(name) = names.get(&session_id) { name.clone() }
+        else if !first_user_message.is_empty() { first_user_message }
+        else { format!("Session {}", &session_id[..8.min(session_id.len())]) };
 
     Some(SessionInfo {
         id: session_id, title, timestamp, message_count, project_name, project_path: cwd,
@@ -634,8 +655,9 @@ fn get_sessions(encoded_name: String) -> Vec<SessionInfo> {
 
     // Codex sessions have no per-project directory — match rollouts whose recorded cwd
     // encodes to the same project directory name Claude would use.
+    let codex_names = codex_session_names();
     for p in codex_rollout_files() {
-        if let Some(s) = parse_codex_session(&p) {
+        if let Some(s) = parse_codex_session(&p, &codex_names) {
             if encode_project_name(&s.project_path) == encoded_name { sessions.push(s); }
         }
     }
@@ -688,7 +710,8 @@ fn get_all_recent_sessions(limit: usize) -> Vec<SessionInfo> {
     }
 
     // Codex sessions across all directories — same recency pool as the Claude ones.
-    all_sessions.extend(codex_rollout_files().iter().filter_map(|p| parse_codex_session(p)));
+    let codex_names = codex_session_names();
+    all_sessions.extend(codex_rollout_files().iter().filter_map(|p| parse_codex_session(p, &codex_names)));
 
     all_sessions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     all_sessions.truncate(limit);
