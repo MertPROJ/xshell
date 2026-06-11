@@ -13,6 +13,8 @@ import { SettingsView, type ThemeMode } from "./components/SettingsView";
 import { DARK_TERM_BG, LIGHT_TERM_BG } from "./components/TerminalTab";
 import { ProjectEditorDialog } from "./components/ProjectEditorDialog";
 import { ProjectPicker } from "./components/ProjectPicker";
+import { AgentPickerDialog } from "./components/AgentPickerDialog";
+import { AGENT_IDS, AGENTS, type AgentId } from "./agents";
 import type { ProjectInfo, ProjectSettings, SessionFolder, SessionInfo, Tab, Group, LayoutNode, SidebarItem, SidebarFolder } from "./types";
 import { GroupView } from "./components/GroupView";
 import { countLeaves, collectLeafIds, insertLeaf, removeLeaf, setRatioAt, DropZone } from "./layout";
@@ -96,6 +98,9 @@ export default function App() {
   // toggles let the user hide either feature even with stats available.
   const [showRateLimitInSidebar, setShowRateLimitInSidebar] = useState(true);
   const [showSessionRowMetrics, setShowSessionRowMetrics] = useState(true);
+  // Codex's twin of session_row_metrics — independent because the data sources differ:
+  // Claude row metrics need the statusline hook, Codex reads its rollout files directly.
+  const [showSessionRowMetricsCodex, setShowSessionRowMetricsCodex] = useState(true);
   // Replaces the project path in the Claude terminal header with a cost/context strip.
   // Only takes effect when the statusline hook has populated authoritative stats for the
   // session — without it there'd be nothing to show, so the header keeps the path.
@@ -136,6 +141,22 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [editingProjectPath, setEditingProjectPath] = useState<string | null>(null);
+  // Which agent CLIs exist on this machine — gates every agent-choice surface (plus
+  // button, dropdown group, default-agent setting). Until the probe lands we assume
+  // Claude-only, which matches the app's pre-Codex behavior.
+  const [installedAgents, setInstalledAgents] = useState<Record<AgentId, boolean>>({ claude: true, codex: false });
+  // "ask" = show the agent picker dialog per new chat (only relevant with 2+ agents).
+  const [defaultAgent, setDefaultAgent] = useState<"ask" | AgentId>("ask");
+  // Project waiting on an agent choice — set when a new chat needs the picker dialog.
+  const [agentPickerProject, setAgentPickerProject] = useState<ProjectInfo | null>(null);
+
+  useEffect(() => {
+    AGENT_IDS.forEach(id => {
+      invoke<{ installed: boolean }>("detect_agent_binary", { binary: AGENTS[id].binary })
+        .then(p => setInstalledAgents(prev => ({ ...prev, [id]: p.installed })))
+        .catch(() => {});
+    });
+  }, []);
   // Update check — fetches GitHub Releases on mount; the result drives the red badge on the
   // Settings cog (Sidebar), the About page (SettingsView), and the on-start dialog.
   const updateInfo = useUpdateCheck();
@@ -158,7 +179,7 @@ export default function App() {
     (async () => {
       try {
         const store = await load("settings.json", { defaults: {}, autoSave: true });
-        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender, termHeaderStats, projectStatsChart, statsView, syncOut, eagerInit, webgl, fontWeight] = await Promise.all([
+        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender, termHeaderStats, projectStatsChart, statsView, syncOut, eagerInit, webgl, fontWeight, defAgent, rowMetricsCodex] = await Promise.all([
           store.get<string[]>("project_paths"),
           store.get<Record<string, ProjectSettings>>("project_icons"),
           store.get<Tab[]>("open_tabs"),
@@ -182,6 +203,8 @@ export default function App() {
           store.get<boolean>("eager_init_tabs"),
           store.get<boolean>("webgl_rendering_enabled"),
           store.get<number>("terminal_font_weight"),
+          store.get<string>("default_agent"),
+          store.get<boolean>("session_row_metrics_codex"),
         ]);
         // Layout: prefer the explicit `sidebar_layout` if present; otherwise migrate
         // from the flat `project_paths` list by wrapping each path in a project item.
@@ -215,6 +238,8 @@ export default function App() {
         if (typeof projectStatsChart === "boolean") setShowProjectStatsChart(projectStatsChart);
         if (storedTheme === "light" || storedTheme === "dark") setTheme(storedTheme);
         if (statsView === "cost" || statsView === "tokens") setProjectStatsView(statsView);
+        if (defAgent === "ask" || defAgent === "claude" || defAgent === "codex") setDefaultAgent(defAgent);
+        if (typeof rowMetricsCodex === "boolean") setShowSessionRowMetricsCodex(rowMetricsCodex);
         // Restore only tabs that have a real sessionId (not abandoned "New Chat" tabs)
         if (savedTabs?.length) {
           const restorable = savedTabs.filter(t => t.sessionId && t.projectPath);
@@ -398,6 +423,11 @@ export default function App() {
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("session_row_metrics", enabled); } catch (_) {}
   }, []);
 
+  const persistShowSessionRowMetricsCodex = useCallback(async (enabled: boolean) => {
+    setShowSessionRowMetricsCodex(enabled);
+    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("session_row_metrics_codex", enabled); } catch (_) {}
+  }, []);
+
   const persistShowTerminalHeaderStats = useCallback(async (enabled: boolean) => {
     setShowTerminalHeaderStats(enabled);
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("terminal_header_stats", enabled); } catch (_) {}
@@ -466,6 +496,11 @@ export default function App() {
     setTheme(next);
     document.documentElement.dataset.theme = next;
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("theme", next); } catch (_) {}
+  }, []);
+
+  const persistDefaultAgent = useCallback(async (next: "ask" | "claude" | "codex") => {
+    setDefaultAgent(next);
+    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("default_agent", next); } catch (_) {}
   }, []);
 
   // Safety net: keep the attribute in sync with state on every change (covers the initial
@@ -579,7 +614,7 @@ export default function App() {
     // its sessionId after /branch would leave its original session id "free", and a later
     // re-open of that session would generate a colliding tab id.
     const tabId = `terminal-${session.id}-${Date.now().toString(36)}`;
-    setTabs(prev => [...prev, { id: tabId, type: "terminal", title: session.title, sessionId: session.id, projectPath: session.project_path || project?.path || "", projectName: session.project_name || project?.name || "", lastActiveAt: Date.now() }]);
+    setTabs(prev => [...prev, { id: tabId, type: "terminal", title: session.title, sessionId: session.id, agent: session.agent, projectPath: session.project_path || project?.path || "", projectName: session.project_name || project?.name || "", lastActiveAt: Date.now() }]);
     setActiveTabId(tabId);
   }, [tabs]);
 
@@ -588,19 +623,37 @@ export default function App() {
     const existingTab = tabs.find(t => t.sessionId === session.id);
     if (existingTab) return;
     const tabId = `terminal-${session.id}-${Date.now().toString(36)}`;
-    setTabs(prev => [...prev, { id: tabId, type: "terminal", title: session.title, sessionId: session.id, projectPath: session.project_path || project?.path || "", projectName: session.project_name || project?.name || "", lastActiveAt: Date.now() }]);
+    setTabs(prev => [...prev, { id: tabId, type: "terminal", title: session.title, sessionId: session.id, agent: session.agent, projectPath: session.project_path || project?.path || "", projectName: session.project_name || project?.name || "", lastActiveAt: Date.now() }]);
   }, [tabs]);
 
-  const handleNewChat = useCallback((project: ProjectInfo) => {
+  const handleNewChat = useCallback((project: ProjectInfo, agent?: AgentId) => {
+    // Resolve which agent hosts the chat: explicit pick > single installed agent > the
+    // user's default. With multiple agents and no default ("ask"), open the picker dialog
+    // and re-enter with the chosen agent. Single-agent machines never see any of this.
+    if (!agent) {
+      const installed = AGENT_IDS.filter(a => installedAgents[a]);
+      if (installed.length > 1) {
+        if (defaultAgent !== "ask") agent = defaultAgent;
+        else { setAgentPickerProject(project); return; }
+      } else {
+        agent = installed[0] ?? "claude";
+      }
+    }
     const tabId = `terminal-new-${Date.now()}`;
-    // Pre-allocate a UUID and pass it to Claude via `--session-id`. Two wins over the old
-    // `-n Chat-xxxxxx` approach: (1) we know the JSONL filename from the start, so the polling
-    // sync can match by sessionId immediately instead of racing on customTitle; (2) Claude's
-    // `ai-title` summary actually fires (it's suppressed when customTitle is set).
-    const sessionId = crypto.randomUUID();
-    setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: "New Chat", sessionId, projectPath: project.path, projectName: project.name, shellMode: "claude", lastActiveAt: Date.now() }]);
+    if (agent === "codex") {
+      // Codex has no --session-id equivalent: spawn `codex` bare in the project cwd. The
+      // rollout id only exists once Codex writes it, so the tab starts unlinked.
+      setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: "New Chat", agent: "codex" as const, projectPath: project.path, projectName: project.name, shellMode: "claude" as const, lastActiveAt: Date.now() }]);
+    } else {
+      // Pre-allocate a UUID and pass it to Claude via `--session-id`. Two wins over the old
+      // `-n Chat-xxxxxx` approach: (1) we know the JSONL filename from the start, so the polling
+      // sync can match by sessionId immediately instead of racing on customTitle; (2) Claude's
+      // `ai-title` summary actually fires (it's suppressed when customTitle is set).
+      const sessionId = crypto.randomUUID();
+      setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: "New Chat", sessionId, agent: "claude" as const, projectPath: project.path, projectName: project.name, shellMode: "claude" as const, lastActiveAt: Date.now() }]);
+    }
     setActiveTabId(tabId);
-  }, []);
+  }, [installedAgents, defaultAgent]);
 
   // Open a raw shell tab (no Claude wrapping) — disposable by design, not persisted across restart.
   // project === null → shell spawned in the user's home directory.
@@ -980,8 +1033,8 @@ export default function App() {
     return null;
   })();
 
-  const handleNewChatInActive = useCallback(() => {
-    if (contextProject) handleNewChat(contextProject);
+  const handleNewChatInActive = useCallback((agent?: AgentId) => {
+    if (contextProject) handleNewChat(contextProject, agent);
   }, [contextProject, handleNewChat]);
 
   // The + button in the tab bar: always open a raw shell using the user's default shell,
@@ -1006,17 +1059,17 @@ export default function App() {
 
   return (
     <div className={`app-layout ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <TabBar tabs={tabs} entries={entries} onRenameGroup={(id, name) => setGroups(prev => prev.map(g => g.id === id ? { ...g, name } : g))} closingTabIds={closingTabIds} activeTabId={activeTabId} selectedProject={selectedProject} hoveredProjectPath={hoveredProjectPath} linkedProjectPath={activeTabProjectPath} activeTabProject={contextProject} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} projectIcons={projectIcons} pinnedProjects={userProjects} sidebarCollapsed={sidebarCollapsed} defaultShell={defaultShell} updateAvailable={updateInfo.updateAvailable} onExpandSidebar={() => setSidebarCollapsed(false)} onSelectTab={handleSelectTab} onCloseTab={handleCloseTab} onReorderTabs={handleReorderTabs} onNewChat={handleNewChat} onNewChatInActive={handleNewChatInActive} onNewShellInContext={handleNewShellInContext} onOpenSession={handleOpenSession} onNewShell={handleNewShell} onGoHome={handleGoHome} onOpenSettings={() => setActiveTabId("settings")} onToggleSidebar={() => setSidebarCollapsed(c => !c)} />
+      <TabBar tabs={tabs} entries={entries} onRenameGroup={(id, name) => setGroups(prev => prev.map(g => g.id === id ? { ...g, name } : g))} closingTabIds={closingTabIds} activeTabId={activeTabId} selectedProject={selectedProject} hoveredProjectPath={hoveredProjectPath} linkedProjectPath={activeTabProjectPath} activeTabProject={contextProject} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} projectIcons={projectIcons} pinnedProjects={userProjects} sidebarCollapsed={sidebarCollapsed} defaultShell={defaultShell} installedAgents={installedAgents} updateAvailable={updateInfo.updateAvailable} onExpandSidebar={() => setSidebarCollapsed(false)} onSelectTab={handleSelectTab} onCloseTab={handleCloseTab} onReorderTabs={handleReorderTabs} onNewChat={handleNewChat} onNewChatInActive={handleNewChatInActive} onNewShellInContext={handleNewShellInContext} onOpenSession={handleOpenSession} onNewShell={handleNewShell} onGoHome={handleGoHome} onOpenSettings={() => setActiveTabId("settings")} onToggleSidebar={() => setSidebarCollapsed(c => !c)} />
       <div className="app-body">
       <Sidebar projects={userProjects} projectIcons={projectIcons} selectedProject={selectedProject} activeCountByProject={activeCountByProject} sidebarLayout={sidebarLayout} onLayoutChange={persistSidebarLayout} onSelectProject={handleSelectProject} onGoHome={handleGoHome} onRemoveProject={handleRemoveProject} onEditProject={(p) => setEditingProjectPath(p)} onHoverProject={setHoveredProjectPath} onOpenSettings={() => setActiveTabId("settings")} onAddProject={() => setShowProjectPicker(true)} onCollapse={() => setSidebarCollapsed(true)} activeTabId={activeTabId} linkedProjectPath={activeTabProjectPath} showRateLimit={showRateLimitInSidebar} updateAvailable={updateInfo.updateAvailable} />
       <div className="main-content">
         {/* Settings view — hidden unless activeTabId === 'settings' */}
         <div style={{ display: showSettings ? "flex" : "none", flex: 1, overflow: "hidden" }}>
-          <SettingsView theme={theme} onSetTheme={persistTheme} gitLazyPolling={gitLazyPolling} onSetGitLazyPolling={persistGitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} forceSyncOutput={forceSyncOutput} onSetForceSyncOutput={persistForceSyncOutput} webglRendering={webglRendering} onSetWebglRendering={persistWebglRendering} terminalFontWeight={terminalFontWeight} onSetTerminalFontWeight={persistTerminalFontWeight} eagerInitTabs={eagerInitTabs} onSetEagerInitTabs={persistEagerInitTabs} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} showTerminalHeaderStats={showTerminalHeaderStats} onSetShowTerminalHeaderStats={persistShowTerminalHeaderStats} showProjectStatsChart={showProjectStatsChart} onSetShowProjectStatsChart={persistShowProjectStatsChart} updateInfo={updateInfo} />
+          <SettingsView theme={theme} onSetTheme={persistTheme} defaultAgent={defaultAgent} onSetDefaultAgent={persistDefaultAgent} gitLazyPolling={gitLazyPolling} onSetGitLazyPolling={persistGitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} forceSyncOutput={forceSyncOutput} onSetForceSyncOutput={persistForceSyncOutput} webglRendering={webglRendering} onSetWebglRendering={persistWebglRendering} terminalFontWeight={terminalFontWeight} onSetTerminalFontWeight={persistTerminalFontWeight} eagerInitTabs={eagerInitTabs} onSetEagerInitTabs={persistEagerInitTabs} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} showSessionRowMetricsCodex={showSessionRowMetricsCodex} onSetShowSessionRowMetricsCodex={persistShowSessionRowMetricsCodex} showTerminalHeaderStats={showTerminalHeaderStats} onSetShowTerminalHeaderStats={persistShowTerminalHeaderStats} showProjectStatsChart={showProjectStatsChart} onSetShowProjectStatsChart={persistShowProjectStatsChart} updateInfo={updateInfo} />
         </div>
         {/* Home view — hidden when a terminal tab is active */}
         <div style={{ display: showHome ? "flex" : "none", flex: 1, overflow: "hidden" }}>
-          <HomeView contextTreeEnabled={contextTreeEnabled} showSessionRowMetrics={showSessionRowMetrics} showProjectStatsChart={showProjectStatsChart} projects={userProjects} allProjects={allProjects} selectedProject={selectedProject} projectIcons={projectIcons} recentSessions={recentSessions} projectSessions={projectSessions} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} sessionGroupName={(() => {
+          <HomeView contextTreeEnabled={contextTreeEnabled} showSessionRowMetrics={showSessionRowMetrics} showSessionRowMetricsCodex={showSessionRowMetricsCodex} showProjectStatsChart={showProjectStatsChart} projects={userProjects} allProjects={allProjects} activeCountByProject={activeCountByProject} selectedProject={selectedProject} projectIcons={projectIcons} recentSessions={recentSessions} projectSessions={projectSessions} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} sessionGroupName={(() => {
             const map: Record<string, string> = {};
             for (const t of tabs) {
               if (t.sessionId && t.groupId) {
@@ -1103,6 +1156,7 @@ export default function App() {
       </div>
       </div>
       {showProjectPicker && <ProjectPicker allProjects={allProjects} savedPaths={savedPaths} onToggle={handleToggleProject} onBrowse={() => { handleBrowseFolder(); setShowProjectPicker(false); }} onClose={() => setShowProjectPicker(false)} onRefresh={async () => { try { setAllProjects(await invoke<ProjectInfo[]>("list_claude_projects")); } catch (_) {} }} />}
+      {agentPickerProject && <AgentPickerDialog project={agentPickerProject} agents={AGENT_IDS.filter(a => installedAgents[a])} onPick={(agent) => { const p = agentPickerProject; setAgentPickerProject(null); handleNewChat(p, agent); }} onClose={() => setAgentPickerProject(null)} onOpenSettings={() => { setAgentPickerProject(null); setActiveTabId("settings"); }} />}
       {editingProjectPath && (() => {
         const proj = allProjects.find(p => p.path.toLowerCase() === editingProjectPath.toLowerCase()) || userProjects.find(p => p.path.toLowerCase() === editingProjectPath.toLowerCase());
         if (!proj) { setEditingProjectPath(null); return null; }

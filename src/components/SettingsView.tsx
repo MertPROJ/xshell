@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Paintbrush, Terminal as TerminalIcon, Settings as SettingsIcon, RotateCcw, Sparkles, Info, ExternalLink, RefreshCw, CheckCircle2, ChevronRight, Download, AlertTriangle, Loader2 } from "lucide-react";
+import { Paintbrush, Terminal as TerminalIcon, Settings as SettingsIcon, RotateCcw, Sparkles, Info, ExternalLink, RefreshCw, CheckCircle2, ChevronRight, Download, AlertTriangle, Loader2, Bot } from "lucide-react";
 import { getAvailableShells } from "../shells";
 import { ShellIcon } from "./ShellIcon";
+import { AGENT_IDS, AGENTS, AgentIcon, type AgentId } from "../agents";
 import { useTooltip, ttProps } from "./Tooltip";
 import { DetailedSessionInfoWizard } from "./DetailedSessionInfoWizard";
 import { DARK_TERM_BG, LIGHT_TERM_BG } from "./TerminalTab";
@@ -15,6 +16,8 @@ export type ThemeMode = "dark" | "light";
 interface SettingsViewProps {
   theme: ThemeMode;
   onSetTheme: (theme: ThemeMode) => void;
+  defaultAgent: "ask" | AgentId;
+  onSetDefaultAgent: (agent: "ask" | AgentId) => void;
   gitLazyPolling: boolean;
   onSetGitLazyPolling: (enabled: boolean) => void;
   gitPanelFilenamesOnly: boolean;
@@ -43,6 +46,8 @@ interface SettingsViewProps {
   onSetShowRateLimitInSidebar: (enabled: boolean) => void;
   showSessionRowMetrics: boolean;
   onSetShowSessionRowMetrics: (enabled: boolean) => void;
+  showSessionRowMetricsCodex: boolean;
+  onSetShowSessionRowMetricsCodex: (enabled: boolean) => void;
   showTerminalHeaderStats: boolean;
   onSetShowTerminalHeaderStats: (enabled: boolean) => void;
   showProjectStatsChart: boolean;
@@ -50,15 +55,48 @@ interface SettingsViewProps {
   updateInfo: UpdateInfo;
 }
 
-type Category = "appearance" | "connect" | "terminal" | "behavior" | "about";
+type Category = "appearance" | "agents" | "terminal" | "behavior" | "about";
 
 const CATEGORIES: { id: Category; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
   { id: "appearance", label: "Appearance", icon: Paintbrush },
-  { id: "connect",    label: "Connect",    icon: Sparkles },
+  { id: "agents",     label: "Agents",     icon: Bot },
   { id: "terminal",   label: "Terminal",   icon: TerminalIcon },
   { id: "behavior",   label: "Behavior",   icon: SettingsIcon },
   { id: "about",      label: "About",      icon: Info },
 ];
+
+// Mirror of the Rust AgentBinaryProbe — result of resolving an agent CLI on the user's PATH.
+interface AgentProbe { installed: boolean; path: string | null; version: string | null }
+type AgentProbeState = { loading: boolean; probe: AgentProbe | null };
+
+// Identity card at the top of each agent's block on the Agents page: icon + name, the
+// resolved binary path once detected, and a live found / not-found chip. `--version` output
+// varies per agent ("2.1.129 (Claude Code)", "codex-cli 0.46.0"), so the chip shows just the
+// extracted version number. The whole card toggles the agent's settings body open/closed —
+// same chevron affordance as the changelog rows — so the detection status stays visible
+// even when an agent's settings are collapsed.
+function AgentHeader({ icon, name, tagline, state, onRefresh, open, onToggle, tt }: { icon: React.ReactNode; name: string; tagline: string; state: AgentProbeState; onRefresh: () => void; open: boolean; onToggle: () => void; tt: ReturnType<typeof useTooltip>["tt"] }) {
+  const { loading, probe } = state;
+  const version = probe?.version?.match(/\d+(?:\.\d+)+/)?.[0];
+  return (
+    <div className={`settings-agent-header ${open ? "is-open" : ""}`} onClick={onToggle} role="button" aria-expanded={open}>
+      <ChevronRight size={13} className="settings-agent-chevron" />
+      <div className="settings-agent-icon">{icon}</div>
+      <div className="settings-agent-text">
+        <div className="settings-agent-name">{name}</div>
+        <div className="settings-agent-sub">{probe?.installed && probe.path ? <span className="settings-agent-path" {...ttProps(tt, probe.path)}>{probe.path}</span> : tagline}</div>
+      </div>
+      {loading ? (
+        <span className="settings-version-chip settings-version-chip-muted"><Loader2 size={10} className="settings-spin" /> Checking…</span>
+      ) : probe?.installed ? (
+        <span className="settings-version-chip settings-version-chip-ok"><CheckCircle2 size={10} /> Found in system{version ? ` · v${version}` : ""}</span>
+      ) : (
+        <span className="settings-version-chip settings-version-chip-muted">Not found</span>
+      )}
+      <button className="btn btn-ghost settings-action-btn" onClick={(e) => { e.stopPropagation(); onRefresh(); }} disabled={loading}><RefreshCw size={11} /> Re-check</button>
+    </div>
+  );
+}
 
 
 // Collapsible changelog row — version + date as the header, markdown-rendered notes when
@@ -123,13 +161,21 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, webglRendering, onSetWebglRendering, terminalFontWeight, onSetTerminalFontWeight, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgent, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, webglRendering, onSetWebglRendering, terminalFontWeight, onSetTerminalFontWeight, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showSessionRowMetricsCodex, onSetShowSessionRowMetricsCodex, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
   // metrics toggles — there's no point letting users enable features that have no data
   // source. We re-probe whenever the wizard closes (in case they just installed the hook).
   const [statslineConfigured, setStatslineConfigured] = useState(false);
+  // Per-agent binary detection for the Agents page. Probed when the page is opened (and on
+  // demand via Re-check) rather than on every settings mount — the version probe actually
+  // launches the CLI once, which costs ~a second for node-based shims.
+  const [agentProbes, setAgentProbes] = useState<Record<AgentId, AgentProbeState>>({ claude: { loading: true, probe: null }, codex: { loading: true, probe: null } });
+  // Both agents start collapsed — the header chips already answer the "is it installed?"
+  // question on their own; expanding is for digging into an agent's settings.
+  const [expandedAgents, setExpandedAgents] = useState<Record<AgentId, boolean>>({ claude: false, codex: false });
+  const toggleAgent = (id: AgentId) => setExpandedAgents(prev => ({ ...prev, [id]: !prev[id] }));
   const installer = useInstaller(updateInfo.update);
   const shells = getAvailableShells();
   const { tt, Tooltip } = useTooltip();
@@ -142,11 +188,23 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
     return () => { cancelled = true; };
   }, [wizardOpen]);
 
+  const probeAgents = useCallback(() => {
+    AGENT_IDS.forEach(id => {
+      setAgentProbes(prev => ({ ...prev, [id]: { loading: true, probe: prev[id].probe } }));
+      invoke<AgentProbe>("detect_agent_binary", { binary: AGENTS[id].binary })
+        .then(probe => setAgentProbes(prev => ({ ...prev, [id]: { loading: false, probe } })))
+        .catch(() => setAgentProbes(prev => ({ ...prev, [id]: { loading: false, probe: null } })));
+    });
+  }, []);
+
+  const onAgentsPage = active === "agents";
+  useEffect(() => { if (onAgentsPage) probeAgents(); }, [onAgentsPage, probeAgents]);
+
   return (
     <div className="settings-view fade-in">
       <div className="settings-view-header">
         <h1 className="settings-view-title">Settings</h1>
-        <p className="settings-view-subtitle">Configure appearance, connect to Claude Code, terminal behavior, and how the window behaves.</p>
+        <p className="settings-view-subtitle">Configure appearance, coding agents, terminal behavior, and how the window behaves.</p>
       </div>
       <div className="settings-view-layout">
         <div className="settings-nav">
@@ -157,7 +215,7 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
               {/* Tells the user where the +1 on the Settings cog is coming from. */}
               {id === "about" && updateInfo.updateAvailable && <span className="settings-nav-dot" title="Update available" />}
               {/* Nudge new users toward the Claude Code hookup — drops once they've connected. */}
-              {id === "connect" && !statslineConfigured && <span className="settings-nav-dot settings-nav-dot-recommended" title="Recommended setup" />}
+              {id === "agents" && !statslineConfigured && <span className="settings-nav-dot settings-nav-dot-recommended" title="Recommended setup" />}
             </div>
           ))}
         </div>
@@ -175,15 +233,43 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
               </Section>
 
               <Section title="Side panels" description="What's visible on either side of the project / session view.">
-                <SettingRow title="Context tree" description="Show the Skills, Plugins, MCPs, and Memories panel on the right side of a project's detail view.">
+                <SettingRow title="Context tree" description="Show the context panel on the right side of a project's detail view — skills, plugins, MCPs, instructions, and memories from the agents used in that project.">
                   <Toggle checked={contextTreeEnabled} onChange={onSetContextTreeEnabled} />
                 </SettingRow>
               </Section>
             </>
           )}
 
-          {active === "connect" && (
+          {active === "agents" && (
             <>
+              {(() => {
+                // Default-agent choice only means something with 2+ agents installed; with
+                // one, the select is pinned to it and disabled. Probe state drives this.
+                const claudeInstalled = !!agentProbes.claude.probe?.installed;
+                const codexInstalled = !!agentProbes.codex.probe?.installed;
+                const multi = claudeInstalled && codexInstalled;
+                const single = claudeInstalled ? "claude" : codexInstalled ? "codex" : "claude";
+                return (
+                  <Section title="Defaults" description="Which agent hosts a new chat (the + button and the tab dropdown).">
+                    <SettingRow title="Default agent" description={multi ? "Pick an agent to start new chats without being asked — or keep “Ask every time” to choose per chat." : "Only one agent was found on this machine, so it's always used. This choice unlocks when a second agent is detected."}>
+                      <select className="settings-select" value={multi ? defaultAgent : single} disabled={!multi} onChange={(e) => onSetDefaultAgent(e.target.value as "ask" | AgentId)}>
+                        {multi ? (
+                          <>
+                            <option value="ask">Ask every time</option>
+                            {AGENT_IDS.map(id => <option key={id} value={id}>{AGENTS[id].label}</option>)}
+                          </>
+                        ) : (
+                          <option value={single}>{AGENTS[single as AgentId].label}</option>
+                        )}
+                      </select>
+                    </SettingRow>
+                  </Section>
+                );
+              })()}
+
+              <div className="settings-agent-block">
+              <AgentHeader icon={<AgentIcon agent="claude" size={18} />} name={AGENTS.claude.label} tagline={AGENTS.claude.tagline} state={agentProbes.claude} onRefresh={probeAgents} open={expandedAgents.claude} onToggle={() => toggleAgent("claude")} tt={tt} />
+              {expandedAgents.claude && <div className="settings-agent-body">
               <div className="settings-connect-hero">
                 <div className="settings-connect-hero-icon"><Sparkles size={18} /></div>
                 <div className="settings-connect-hero-text">
@@ -212,6 +298,29 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                   <Toggle checked={showProjectStatsChart} onChange={onSetShowProjectStatsChart} disabled={!statslineConfigured} />
                 </SettingRow>
               </Section>
+
+              <Section title="Terminal rendering" description="Tweaks applied to every Claude session launched from xshell. Both toggles below are highly recommended to keep ON — they fix rendering issues that are specific to running Claude Code inside an xterm.js host.">
+                <SettingRow title="Full screen rendering" description="Switch Claude Code into the alternate-screen-buffer renderer (no scrollback, no flicker on every refresh). Sets CLAUDE_CODE_NO_FLICKER=1 on each new claude session — open sessions keep their current mode until next launch. Introduced in Claude Code 2.1.89 (April 1, 2026).">
+                  <Toggle checked={fullscreenRendering} onChange={onSetFullscreenRendering} />
+                </SettingRow>
+                <SettingRow title="Force synchronized output" description="Tells Claude Code to wrap each TUI frame in DEC 2026 synchronized-output markers, so xterm.js renders only complete frames — fixes the 'flying letters' residue from half-drawn redraws. Sets CLAUDE_CODE_FORCE_SYNC_OUTPUT=1 on each new claude session. Introduced in Claude Code 2.1.129 (May 6, 2026).">
+                  <Toggle checked={forceSyncOutput} onChange={onSetForceSyncOutput} />
+                </SettingRow>
+              </Section>
+              </div>}
+              </div>
+
+              <div className="settings-agent-block">
+              <AgentHeader icon={<AgentIcon agent="codex" size={18} />} name={AGENTS.codex.label} tagline={AGENTS.codex.tagline} state={agentProbes.codex} onRefresh={probeAgents} open={expandedAgents.codex} onToggle={() => toggleAgent("codex")} tt={tt} />
+              {expandedAgents.codex && <div className="settings-agent-body">
+              <div className="settings-agent-empty">Codex is integrated: its sessions appear in your project and home lists (click to resume), token usage feeds the project stats, and AGENTS.md, prompts, and MCP servers show in the context tree. No setup needed — everything is read straight from <code>~/.codex</code>.</div>
+              <Section title="Session metrics" description="Codex reports context usage in its session files directly — no hook or setup required, so this works out of the box.">
+                <SettingRow title="Detailed info on session rows" description="Show the context bar on each Codex session row. Model and message count always show — those are reliable from the session file alone.">
+                  <Toggle checked={showSessionRowMetricsCodex} onChange={onSetShowSessionRowMetricsCodex} />
+                </SettingRow>
+              </Section>
+              </div>}
+              </div>
             </>
           )}
 
@@ -254,8 +363,8 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                 </SettingRow>
               </Section>
 
-              <Section title="Shell" description="Which shell hosts your terminal and Claude sessions.">
-                <SettingRow title="Default shell" description="Shell used when opening a raw terminal tab via the dropdown, and the host shell for Claude sessions.">
+              <Section title="Shell" description="Which shell hosts your terminal and agent sessions.">
+                <SettingRow title="Default shell" description="Shell used when opening a raw terminal tab via the dropdown, and the host shell for agent sessions (Claude Code, Codex).">
                   <div className="settings-shell-row">
                     <ShellIcon id={defaultShell} size={18} />
                     <select className="settings-select" value={defaultShell} onChange={(e) => onSetDefaultShell(e.target.value)}>
@@ -265,23 +374,14 @@ export function SettingsView({ theme, onSetTheme, gitLazyPolling, onSetGitLazyPo
                 </SettingRow>
               </Section>
 
-              <Section title="Claude Code" description="Tweaks applied to every Claude session launched from xshell. Both toggles below are highly recommended to keep ON — they fix rendering issues that are specific to running Claude Code inside an xterm.js host.">
-                <SettingRow title="Full screen rendering" description="Switch Claude Code into the alternate-screen-buffer renderer (no scrollback, no flicker on every refresh). Sets CLAUDE_CODE_NO_FLICKER=1 on each new claude session — open sessions keep their current mode until next launch. Introduced in Claude Code 2.1.89 (April 1, 2026).">
-                  <Toggle checked={fullscreenRendering} onChange={onSetFullscreenRendering} />
-                </SettingRow>
-                <SettingRow title="Force synchronized output" description="Tells Claude Code to wrap each TUI frame in DEC 2026 synchronized-output markers, so xterm.js renders only complete frames — fixes the 'flying letters' residue from half-drawn redraws. Sets CLAUDE_CODE_FORCE_SYNC_OUTPUT=1 on each new claude session. Introduced in Claude Code 2.1.129 (May 6, 2026).">
-                  <Toggle checked={forceSyncOutput} onChange={onSetForceSyncOutput} />
-                </SettingRow>
-              </Section>
-
               <Section title="Startup" description="What happens to your saved tabs when xshell launches.">
-                <SettingRow title="Pre-initialize tabs on launch" description="Spawn each restored tab's session immediately at app start, instead of deferring until you click into the tab. Claude takes a few seconds to boot, so eager init means the session is ready (or close to it) by the time you switch to it. Open a tab whose session is still booting and the 'Starting Claude…' spinner shows until the first frame renders.">
+                <SettingRow title="Pre-initialize tabs on launch" description="Spawn each restored tab's session immediately at app start, instead of deferring until you click into the tab. Agents take a few seconds to boot, so eager init means the session is ready (or close to it) by the time you switch to it. Open a tab whose session is still booting and the starting spinner shows until the first frame renders.">
                   <Toggle checked={eagerInitTabs} onChange={onSetEagerInitTabs} />
                 </SettingRow>
               </Section>
 
-              <Section title="Terminal sidebar" description="Right-side activity bar inside Claude terminal tabs.">
-                <SettingRow title="Only poll git when panel is open" description="When on (default), git status is fetched once when the Claude session starts, then again only while the git panel is open. Turn off to keep polling every few seconds even when the panel is closed.">
+              <Section title="Terminal sidebar" description="Right-side activity bar inside agent terminal tabs.">
+                <SettingRow title="Only poll git when panel is open" description="When on (default), git status is fetched once when the session starts, then again only while the git panel is open. Turn off to keep polling every few seconds even when the panel is closed.">
                   <Toggle checked={gitLazyPolling} onChange={onSetGitLazyPolling} />
                 </SettingRow>
                 <SettingRow title="Filenames only" description="In the git panel, show just the file name (basename) instead of the full relative path. Hover a row to see the full path.">

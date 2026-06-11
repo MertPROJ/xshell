@@ -6,6 +6,60 @@ export interface ProjectInfo {
   last_active: string;
 }
 
+// Directory Codex has been used in — derived from ~/.codex/sessions rollout metadata
+// (see list_codex_projects in lib.rs). Unlike ProjectInfo there's no encoded_name: Codex
+// has no per-project directory, sessions are grouped by their recorded cwd.
+export interface CodexProjectInfo {
+  path: string;
+  session_count: number;
+  last_active: string;
+}
+
+// ── Agent context (see lib.rs: get_codex_context) ──
+// Generic titled sections — the context tree renders these without knowing the agent, so
+// future agents only need a backend command returning the same shape.
+
+export interface AgentContextItem {
+  name: string;
+  detail: string; // secondary line (scope, command, …); empty when none
+  path: string;   // openable file path; empty when not file-backed
+}
+
+export interface AgentContextSection {
+  title: string;
+  items: AgentContextItem[];
+}
+
+export interface CodexContext {
+  present: boolean;
+  trust_level: string | null;
+  sections: AgentContextSection[];
+}
+
+// ── Home usage strip (see lib.rs: get_claude_cost_summary / get_codex_usage) ──
+
+export interface DailyUsd { date: string; usd: number }
+
+export interface ClaudeCostSummary {
+  connected: boolean; // any xshell-stats hook files exist
+  daily: DailyUsd[];  // ascending by date
+}
+
+export interface CodexRateWindow {
+  used_percent: number | null;
+  window_minutes: number | null;
+  resets_at: number | null; // unix seconds
+}
+
+export interface CodexUsage {
+  present: boolean;
+  primary: CodexRateWindow | null;   // 5h window
+  secondary: CodexRateWindow | null; // 7d window
+  plan_type: string | null;
+  rate_limits_updated_iso: string | null; // staleness marker — limits are from the last Codex run
+  daily_sessions: { date: string; count: number }[];
+}
+
 export interface SessionFolder {
   id: string;
   name: string;
@@ -48,6 +102,9 @@ export interface SessionInfo {
   // Per-day token breakdown keyed by YYYY-MM-DD. Tuple is [input, cache_creation, cache_read,
   // output] — the four bands the project stats panel stacks in tokens-mode.
   daily_tokens: Record<string, [number, number, number, number]>;
+  // Which coding agent produced this session — drives the row icon, model formatting, and
+  // the resume command the terminal tab spawns.
+  agent: "claude" | "codex";
 }
 
 export interface MessagePreview {
@@ -209,6 +266,7 @@ export interface Tab {
   encodedName?: string;
   shellMode?: 'claude' | 'raw'; // default 'claude'. 'raw' = plain shell, no claude command
   shellId?: string; // e.g. 'powershell', 'cmd', 'bash', 'zsh' — when shellMode='raw'
+  agent?: 'claude' | 'codex'; // which agent CLI the tab hosts; default 'claude'
   groupId?: string; // when set, the tab is a member of a group (not standalone in the tab bar)
   lastActiveAt?: number; // ms epoch — bumped whenever the tab becomes the focused leaf; drives "recent" sort in the tab search dialog
 }

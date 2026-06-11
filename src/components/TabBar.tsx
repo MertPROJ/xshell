@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useLayoutEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { X, Minus, Square, X as XIcon, Plus, ChevronDown, ChevronLeft, ChevronRight, Terminal as TerminalIcon, Command, Settings } from "lucide-react";
+import { X, Minus, Square, X as XIcon, Plus, ChevronDown, ChevronLeft, ChevronRight, Terminal as TerminalIcon, Command, Settings, Bot } from "lucide-react";
 import { ShellIcon } from "./ShellIcon";
+import { AGENT_IDS, AGENTS, AgentIcon, type AgentId } from "../agents";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { timeAgo, processSessions } from "../utils";
 import type { ProjectInfo, ProjectSettings, SessionInfo, Tab, Group } from "../types";
@@ -52,8 +53,9 @@ interface TabBarProps {
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onReorderTabs: (tabs: Tab[]) => void;
-  onNewChat: (project: ProjectInfo) => void;
-  onNewChatInActive: () => void;
+  onNewChat: (project: ProjectInfo, agent?: AgentId) => void;
+  onNewChatInActive: (agent?: AgentId) => void;
+  installedAgents: Record<AgentId, boolean>;
   onNewShellInContext: () => void;
   onOpenSession: (session: SessionInfo, project: ProjectInfo) => void;
   onNewShell: (project: ProjectInfo | null, shellId: string, shellName: string) => void;
@@ -63,7 +65,7 @@ interface TabBarProps {
   onToggleSidebar: () => void;
 }
 
-function RecentSessionsDropdown({ project, displayName, openSessionIds, anchorRect, anchorEl, onPick, onPickShell, onNewChat, onClose }: { project: ProjectInfo | null; displayName: string; openSessionIds: Set<string>; anchorRect: DOMRect; anchorEl: HTMLElement; onPick: (s: SessionInfo) => void; onPickShell: (shellId: string, shellName: string) => void; onNewChat: () => void; onClose: () => void }) {
+function RecentSessionsDropdown({ project, displayName, openSessionIds, anchorRect, anchorEl, installedAgents, onPick, onPickShell, onNewChat, onClose }: { project: ProjectInfo | null; displayName: string; openSessionIds: Set<string>; anchorRect: DOMRect; anchorEl: HTMLElement; installedAgents: Record<AgentId, boolean>; onPick: (s: SessionInfo) => void; onPickShell: (shellId: string, shellName: string) => void; onNewChat: (agent?: AgentId) => void; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
 
@@ -105,15 +107,42 @@ function RecentSessionsDropdown({ project, displayName, openSessionIds, anchorRe
   const shells = getAvailableShells();
   // If there's no project, collapsing the shells makes no sense — there's nothing else in the dropdown.
   const [shellsOpen, setShellsOpen] = useState(!project);
+  // With one agent installed the new-chat entry stays a single row for that agent; with
+  // multiple it becomes a collapsible group like "Start new shell" (open by default — it
+  // replaces the dropdown's primary action).
+  const agents = AGENT_IDS.filter(id => installedAgents[id]).map(id => AGENTS[id]);
+  const [agentsOpen, setAgentsOpen] = useState(true);
 
   return (
     <div className="tab-dropdown" ref={ref} style={positionStyle}>
-      {project && (
+      {project && agents.length > 1 ? (
         <>
-          <div className="tab-dropdown-item" onClick={() => { onNewChat(); onClose(); }}>
-            <ClaudeChatIcon size={14} className="tab-dropdown-shell-icon" />
+          <div className={`tab-dropdown-group-header ${agentsOpen ? "open" : ""}`} onClick={() => setAgentsOpen(v => !v)}>
+            <ChevronRight size={11} className="tab-dropdown-group-chev" />
+            <Bot size={11} />
+            <span className="tab-dropdown-group-label">Start new Agent CLI</span>
+            <span className="tab-dropdown-group-count">{agents.length}</span>
+          </div>
+          {agentsOpen && (
+            <div className="tab-dropdown-group-body">
+              {agents.map(a => (
+                <div key={a.id} className="tab-dropdown-item tab-dropdown-item-nested" onClick={() => { onNewChat(a.id); onClose(); }}>
+                  <AgentIcon agent={a.id} size={14} className={`tab-dropdown-shell-icon ${a.neutralIcon ? "tab-dropdown-icon-neutral" : ""}`} />
+                  <div className="tab-dropdown-item-content">
+                    <div className="tab-dropdown-item-title">{a.label} in {displayName}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="tab-dropdown-divider" />
+        </>
+      ) : project && (
+        <>
+          <div className="tab-dropdown-item" onClick={() => { onNewChat(agents[0]?.id); onClose(); }}>
+            <AgentIcon agent={agents[0]?.id} size={14} className={`tab-dropdown-shell-icon ${agents[0]?.neutralIcon ? "tab-dropdown-icon-neutral" : ""}`} />
             <div className="tab-dropdown-item-content">
-              <div className="tab-dropdown-item-title">New chat in {displayName}</div>
+              <div className="tab-dropdown-item-title tab-dropdown-title-ui">New chat in {displayName}</div>
             </div>
           </div>
           <div className="tab-dropdown-divider" />
@@ -146,7 +175,7 @@ function RecentSessionsDropdown({ project, displayName, openSessionIds, anchorRe
           {sessions !== null && sorted.length === 0 && <div className="tab-dropdown-empty">{sessions.length === 0 ? "No sessions yet" : "All sessions are already open"}</div>}
           {sorted.map(s => (
             <div key={s.id} className="tab-dropdown-item" onClick={() => { onPick(s); onClose(); }}>
-              <ClaudeChatIcon size={13} className="tab-dropdown-prompt" />
+              <AgentIcon agent={s.agent} size={13} className={`tab-dropdown-prompt ${AGENTS[s.agent || "claude"].neutralIcon ? "tab-dropdown-icon-neutral" : ""}`} />
               <div className="tab-dropdown-item-content">
                 <div className="tab-dropdown-item-title">{s.title}</div>
                 <div className="tab-dropdown-item-time">{timeAgo(s.timestamp)}</div>
@@ -173,7 +202,7 @@ function TabTooltip({ text, rect }: { text: string; rect: DOMRect }) {
   return <div className="tab-tooltip" ref={ref} style={style}>{text}</div>;
 }
 
-export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProject, hoveredProjectPath, linkedProjectPath, activeTabProject, openSessionIds, projectIcons, pinnedProjects, sidebarCollapsed, defaultShell, updateAvailable, onExpandSidebar, onSelectTab, onCloseTab, onReorderTabs, onNewChat, onNewChatInActive, onNewShellInContext, onOpenSession, onNewShell, onRenameGroup, onGoHome, onOpenSettings, onToggleSidebar }: TabBarProps) {
+export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProject, hoveredProjectPath, linkedProjectPath, activeTabProject, openSessionIds, projectIcons, pinnedProjects, sidebarCollapsed, defaultShell, installedAgents, updateAvailable, onExpandSidebar, onSelectTab, onCloseTab, onReorderTabs, onNewChat, onNewChatInActive, onNewShellInContext, onOpenSession, onNewShell, onRenameGroup, onGoHome, onOpenSettings, onToggleSidebar }: TabBarProps) {
   const appWindow = getCurrentWindow();
   const highlightPath = hoveredProjectPath || linkedProjectPath || selectedProject?.path || null;
   const [dropdown, setDropdown] = useState<{ rect: DOMRect; el: HTMLElement } | null>(null);
@@ -331,7 +360,7 @@ export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProj
             const displaySubtitle = isRawShell ? tab.title : projectDisplayName;
             const tooltipText = displaySubtitle ? `${displayTitle} — ${displaySubtitle}` : displayTitle;
             return (
-              <div key={tab.id} data-idx={i} data-drag-id={tab.id} className={`tab-item ${tab.id === activeTabId ? "active" : ""} ${isClosing ? "tab-closing" : ""} ${tab.shellMode === "raw" ? "tab-raw-shell" : ""} ${isDragging ? "tab-dragging" : ""}`} onPointerDown={(e) => onEntryPointerDown(e, i)} onClick={() => { if (!isClosing) onSelectTab(tab.id); }} onMouseEnter={(e) => setTooltip({ text: tooltipText, rect: e.currentTarget.getBoundingClientRect() })} onMouseLeave={() => setTooltip(null)}>
+              <div key={tab.id} data-idx={i} data-drag-id={tab.id} className={`tab-item ${tab.id === activeTabId ? "active" : ""} ${isClosing ? "tab-closing" : ""} ${isRawShell ? "tab-raw-shell" : `tab-agent-${tab.agent || "claude"}`} ${isDragging ? "tab-dragging" : ""}`} onPointerDown={(e) => onEntryPointerDown(e, i)} onClick={() => { if (!isClosing) onSelectTab(tab.id); }} onMouseEnter={(e) => setTooltip({ text: tooltipText, rect: e.currentTarget.getBoundingClientRect() })} onMouseLeave={() => setTooltip(null)}>
                 {showDropBefore && <div className="tab-drop-line tab-drop-line-before" />}
                 {isRawShell
                   ? <ShellIcon id={tab.shellId} size={14} className="tab-shell-icon" />
@@ -396,7 +425,7 @@ export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProj
       </div>
 
       {dropdown && (
-        <RecentSessionsDropdown project={activeTabProject} displayName={activeTabProject ? (projectIcons[activeTabProject.path.toLowerCase()]?.customName || activeTabProject.name) : ""} openSessionIds={openSessionIds} anchorRect={dropdown.rect} anchorEl={dropdown.el} onPick={(s) => activeTabProject && onOpenSession(s, activeTabProject)} onPickShell={(id, name) => onNewShell(activeTabProject, id, name)} onNewChat={onNewChatInActive} onClose={() => setDropdown(null)} />
+        <RecentSessionsDropdown project={activeTabProject} displayName={activeTabProject ? (projectIcons[activeTabProject.path.toLowerCase()]?.customName || activeTabProject.name) : ""} openSessionIds={openSessionIds} anchorRect={dropdown.rect} anchorEl={dropdown.el} installedAgents={installedAgents} onPick={(s) => activeTabProject && onOpenSession(s, activeTabProject)} onPickShell={(id, name) => onNewShell(activeTabProject, id, name)} onNewChat={onNewChatInActive} onClose={() => setDropdown(null)} />
       )}
 
       {tooltip && <TabTooltip text={tooltip.text} rect={tooltip.rect} />}

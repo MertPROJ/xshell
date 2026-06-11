@@ -1,11 +1,18 @@
 import { useEffect, useState, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Network, User, FolderTree, Puzzle, ChevronRight, Plug, Globe, Terminal as TerminalIcon, Wand2, FolderOpen, Sparkles, Brain, Bot, Slash, Zap, FileText, Layers } from "lucide-react";
-import type { ProjectSkills, Skill, Plugin, McpInfo, ProjectMemories, Memory, SubagentInfo, SlashCommand, HookEntry, ClaudeMdFile, SettingsSource } from "../types";
+import type { ProjectSkills, Skill, Plugin, McpInfo, ProjectMemories, Memory, SubagentInfo, SlashCommand, HookEntry, ClaudeMdFile, SettingsSource, CodexContext, AgentContextSection } from "../types";
 import { useTooltip, useTt, ttProps, TooltipProvider } from "./Tooltip";
 import { MarkdownDialog } from "./MarkdownDialog";
+import { AGENTS, AgentIcon } from "../agents";
 
-interface Props { projectPath: string; projectName: string }
+interface Props {
+  projectPath: string;
+  projectName: string;
+  // Which agents have sessions in this project — part of the root-section gating (a pure
+  // Codex project hides the Claude roots and vice versa; see visibility rules in the panel).
+  agentPresence?: { claude: boolean; codex: boolean };
+}
 
 function revealFolder(path: string) { invoke("reveal_in_explorer", { path }).catch(() => {}); }
 
@@ -373,9 +380,53 @@ function RootSection({ icon, title, hint, revealPath, plugins, skills, mcps, mem
   );
 }
 
+// ─── Codex root section ────────────────────────────────────────────
+// Renders the generic sections shape from get_codex_context — no Codex-specific structure,
+// so any future agent returning the same shape gets this rendering for free. The trust
+// badge is the one Codex-specific extra (per-project trust level from config.toml).
+function sectionIcon(title: string): ReactNode {
+  if (title === "Instructions") return <FileText size={11} className="claudemd-icon" />;
+  if (title === "Prompts") return <Slash size={11} />;
+  if (title === "MCP servers") return <Plug size={11} className="mcp-kind-icon" />;
+  return <Bot size={11} />;
+}
+
+function AgentContextRoot({ title, icon, trustLevel, sections, onOpenDoc }: { title: string; icon: ReactNode; trustLevel: string | null; sections: AgentContextSection[]; onOpenDoc: (path: string, title: string) => void }) {
+  const tt = useTt();
+  const total = sections.reduce((sum, sec) => sum + sec.items.length, 0);
+  return (
+    <TreeNode
+      depth={0}
+      variant="root"
+      icon={icon}
+      label={title}
+      sublabel={<span className="tn-hint">agent</span>}
+      meta={trustLevel ? <span className="tn-tag" {...ttProps(tt, "Project trust level from config.toml")}>{trustLevel}</span> : undefined}
+      defaultOpen
+    >
+      {total > 0 ? sections.map(sec => (
+        <Group key={sec.title} depth={1} icon={sectionIcon(sec.title)} label={sec.title} count={sec.items.length}>
+          {sec.items.map(item => (
+            <TreeNode
+              key={`${sec.title}-${item.name}-${item.path}`}
+              depth={2}
+              variant="leaf"
+              icon={sectionIcon(sec.title)}
+              label={item.path ? <span className="tn-clickable" onClick={() => onOpenDoc(item.path, item.name)} {...ttProps(tt, "Open file")}>{item.name}</span> : item.name}
+              sublabel={item.detail ? <span className="tn-hint">{item.detail}</span> : undefined}
+              actions={item.path ? <RevealBtn path={item.path} label="Reveal file" /> : undefined}
+            />
+          ))}
+        </Group>
+      )) : <div className="tn-empty" style={{ paddingLeft: 22 }}>Nothing here yet</div>}
+    </TreeNode>
+  );
+}
+
 // ─── Main panel ────────────────────────────────────────────────────
-export function SkillsPanel({ projectPath, projectName }: Props) {
+export function SkillsPanel({ projectPath, projectName, agentPresence }: Props) {
   const [data, setData] = useState<ProjectSkills | null>(null);
+  const [codexCtx, setCodexCtx] = useState<CodexContext | null>(null);
   const [memories, setMemories] = useState<ProjectMemories>({ dir: "", items: [] });
   const [loading, setLoading] = useState(false);
   const [username, setUsername] = useState("user");
@@ -406,6 +457,12 @@ export function SkillsPanel({ projectPath, projectName }: Props) {
       console.error("[SkillsPanel] memories error:", e);
       setMemories({ dir: "", items: [] });
     } finally { setLoading(false); }
+    try {
+      setCodexCtx(await invoke<CodexContext>("get_codex_context", { projectPath }));
+    } catch (e) {
+      console.error("[SkillsPanel] codex context error:", e);
+      setCodexCtx(null);
+    }
   };
   useEffect(() => { fetchData(); /* eslint-disable-next-line */ }, [projectPath]);
 
@@ -429,6 +486,19 @@ export function SkillsPanel({ projectPath, projectName }: Props) {
   const userSettings      = data?.settings_sources.filter(s => s.scope === "user") || [];
   const projectSettings   = data?.settings_sources.filter(s => s.scope !== "user") || [];
 
+  // ─── Agent-conditional visibility ──────────────────────────────────
+  // Claude roots show when there's any Claude content or the project has Claude sessions —
+  // a pure Codex user (no ~/.claude content at all) never reads Claude vocabulary. The
+  // Codex root shows when Codex artifacts or sessions exist for this project. If neither
+  // side has anything, fall back to the Claude roots (the pre-Codex default empty state).
+  const claudeContentCount = data ? data.personal_skills.length + data.project_skills.length + data.plugins.length + data.user_mcps.length + data.project_mcps.length + data.subagents.length + data.slash_commands.length + data.hooks.length + data.claude_md_files.length + data.settings_sources.filter(s => s.exists).length : 0;
+  const codexVisible = !!(codexCtx?.present || agentPresence?.codex);
+  let claudeVisible = claudeContentCount + memories.items.length > 0 || !!agentPresence?.claude;
+  if (!claudeVisible && !codexVisible) claudeVisible = true;
+  // When both agents share the tree, the Claude roots name their agent in the hint so the
+  // grouping is unambiguous; single-agent trees stay free of agent labels.
+  const claudeHintSuffix = claudeVisible && codexVisible ? ` · ${AGENTS.claude.label}` : "";
+
   return (
     <TooltipProvider tt={tt}>
     <aside className="skills-panel">
@@ -446,10 +516,11 @@ export function SkillsPanel({ projectPath, projectName }: Props) {
         {!data && loading && <div className="skills-empty"><div className="spinner-small" /></div>}
         {data && (
           <div className="tn-root-list">
+            {claudeVisible && <>
             <RootSection
               icon={<User size={12} />}
               title={username}
-              hint="user"
+              hint={`user${claudeHintSuffix}`}
               revealPath={homeDir ? `${homeDir}/.claude` : undefined}
               plugins={userPlugins}
               skills={data.personal_skills}
@@ -464,7 +535,7 @@ export function SkillsPanel({ projectPath, projectName }: Props) {
             <RootSection
               icon={<FolderTree size={12} />}
               title={projectName}
-              hint="this project"
+              hint={`this project${claudeHintSuffix}`}
               revealPath={`${projectPath}/.claude`}
               plugins={localPlugins}
               skills={data.project_skills}
@@ -479,6 +550,16 @@ export function SkillsPanel({ projectPath, projectName }: Props) {
               settingsSources={projectSettings}
               onOpenDoc={(path, title) => setOpenDoc({ path, title })}
             />
+            </>}
+            {codexVisible && codexCtx && (
+              <AgentContextRoot
+                title={AGENTS.codex.label}
+                icon={<AgentIcon agent="codex" size={12} className="tn-agent-icon-neutral" />}
+                trustLevel={codexCtx.trust_level}
+                sections={codexCtx.sections}
+                onOpenDoc={(path, title) => setOpenDoc({ path, title })}
+              />
+            )}
           </div>
         )}
       </div>

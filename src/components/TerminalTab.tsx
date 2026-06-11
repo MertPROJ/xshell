@@ -11,6 +11,7 @@ import "@xterm/xterm/css/xterm.css";
 import { detectMonoFontFamily, ensureMonoFontsLoaded } from "../lib/fonts";
 import type { Tab, GitStatus, GitFile, GitCommit, BranchInfo, SessionInfo, GitBranch as GitBranchEntry } from "../types";
 import { getShellById } from "../shells";
+import { AGENTS } from "../agents";
 import type { ThemeMode } from "./SettingsView";
 
 const DEFAULT_FONT_SIZE = 14;
@@ -443,7 +444,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
         // user's default shell setting, so claude runs under the shell the user picked.
         const effectiveShellId = tabRef.current.shellId || (shellMode === "claude" ? defaultShellId : null);
         const shellCommand = effectiveShellId ? (getShellById(effectiveShellId)?.command || null) : null;
-        await invoke("spawn_terminal", { id, sessionId: tabRef.current.sessionId || null, cwd: tabRef.current.projectPath || ".", cols: term.cols, rows: term.rows, shellMode, shellCommand, shellId: effectiveShellId, fullscreenRendering, forceSyncOutput, onData, onExit });
+        await invoke("spawn_terminal", { id, sessionId: tabRef.current.sessionId || null, cwd: tabRef.current.projectPath || ".", cols: term.cols, rows: term.rows, shellMode, shellCommand, shellId: effectiveShellId, agent: tabRef.current.agent || null, fullscreenRendering, forceSyncOutput, onData, onExit });
         // Post-spawn nudge for ink-based TUIs (claude code). Some Ink renderers ignore the
         // very first SIGWINCH if it arrives mid-bootstrap; a delayed re-fit + forced PTY
         // resize ensures the final cols/rows are picked up cleanly even if xterm's own
@@ -461,7 +462,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
         setIsInitializing(false);
         term.write(`\x1b[31mFailed to start terminal: ${err}\x1b[0m\r\n`);
         if ((tabRef.current.shellMode || "claude") === "claude") {
-          term.write(`\x1b[90mMake sure 'claude' is installed and available in your PATH.\x1b[0m\r\n`);
+          term.write(`\x1b[90mMake sure '${AGENTS[tabRef.current.agent || "claude"].binary}' is installed and available in your PATH.\x1b[0m\r\n`);
         }
       }
 
@@ -823,7 +824,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
   const gitButtonTooltip = `${showGitPanel ? "Hide" : "Show"} git panel — ${gitStatus?.branch || "detached"}${gitCounts ? ` (${gitCounts})` : ""}`;
 
   // Cost/context strip is only meaningful when xshell-stats has populated authoritative
-  // numbers for this session AND the user hasn't opted out via the Connect tab toggle.
+  // numbers for this session AND the user hasn't opted out via the Agents tab toggle.
   // Without authoritative stats the cost would always be $0 and the bar empty — falls back
   // to the plain path in that case (or whenever the user has explicitly disabled the strip).
   const showStatsStrip = isClaudeSession && showTerminalHeaderStats && sessionStats?.is_authoritative_stats && sessionStats.context_limit > 0;
@@ -882,7 +883,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
           {isInitializing && (
             <div className="terminal-loading-overlay">
               <div className="spinner" />
-              <span>{isClaudeSession ? "Starting Claude…" : "Starting shell…"}</span>
+              <span>{isClaudeSession ? `Starting ${AGENTS[tab.agent || "claude"].label}…` : "Starting shell…"}</span>
             </div>
           )}
         </div>

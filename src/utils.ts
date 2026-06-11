@@ -1,5 +1,11 @@
 import type { SessionInfo } from "./types";
 
+// Windows paths arrive with mixed separators and casing depending on which agent recorded
+// them — normalize before using a path as a merge/lookup key across Claude and Codex data.
+export function normalizePath(p: string): string {
+  return p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+}
+
 export function timeAgo(isoDate: string): string {
   if (!isoDate) return "";
   const now = Date.now();

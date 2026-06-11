@@ -313,6 +313,13 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
    No backdrop by default (avoids a mismatched fade); it only gets a chip background on direct hover. */
 .tab-item-close { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); width: 17px; height: 17px; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); background: transparent; opacity: 0; transition: opacity 0.1s, background 0.1s, color 0.1s; }
 .tab-item:hover .tab-item-close { opacity: 0.85; }
+
+/* Minimal agent tint — a faint smoke plume in the tab's top-right corner: terracotta for
+   Claude tabs, off-white for Codex (color-mix so it stays visible on the light theme).
+   Pseudo-element overlay so the tab's own background/hover transitions stay untouched. */
+.tab-agent-claude::after, .tab-agent-codex::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
+.tab-agent-claude::after { background: radial-gradient(45% 160% at 100% 50%, rgba(201, 100, 66, 0.17), transparent 65%); }
+.tab-agent-codex::after { background: radial-gradient(45% 160% at 100% 50%, color-mix(in oklab, var(--text-primary) 13%, transparent), transparent 65%); }
 .tab-item-close:hover { opacity: 1 !important; background: var(--bg-active); color: var(--text-primary); }
 
 /* Small thin tooltip for tabs */
@@ -346,13 +353,19 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .tab-dropdown-group-header.open { color: var(--text-primary); }
 .tab-dropdown-group-chev { transition: transform 0.18s cubic-bezier(.4, 0, .2, 1); color: var(--text-muted); }
 .tab-dropdown-group-header.open .tab-dropdown-group-chev { transform: rotate(90deg); }
-.tab-dropdown-group-label { flex: 1; font-weight: 500; }
+.tab-dropdown-group-label { flex: 1; font-weight: 450; }
 .tab-dropdown-group-count { font-size: 9px; color: var(--text-muted); background: var(--bg-elevated); padding: 1px 6px; border-radius: 8px; }
 .tab-dropdown-group-body { padding-left: 6px; margin-top: 2px; }
 .tab-dropdown-item-nested { padding: 5px 8px; }
-.tab-dropdown-item-nested .tab-dropdown-item-title { font-size: 11px; }
+/* UI entries (shells, agents, "New chat in …") use the sans UI font — the mono face is
+   reserved for actual session titles in the Recent list, where the terminal look belongs. */
+.tab-dropdown-item-nested .tab-dropdown-item-title { font-size: 11px; font-family: var(--font-sans); font-weight: 400; }
+.tab-dropdown-title-ui { font-family: var(--font-sans); font-weight: 400; }
 
 .tab-dropdown-prompt { color: var(--accent-terracotta); font-family: var(--font-mono); font-size: 11px; font-weight: 500; opacity: 0.7; flex-shrink: 0; width: 12px; text-align: center; }
+/* currentColor agent marks render neutral instead of the coral/terracotta accents. */
+.tab-dropdown-icon-neutral { color: var(--text-secondary); }
+.tn-agent-icon-neutral { color: var(--text-secondary); }
 
 .tab-dropdown-loading { display: flex; justify-content: center; padding: 16px; }
 
@@ -455,20 +468,66 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .btn-primary { background: var(--accent-terracotta); border-color: var(--accent-terracotta); color: var(--text-primary); }
 .btn-primary:hover { background: var(--accent-coral); border-color: var(--accent-coral); }
 
-/* Project Cards */
-.project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+/* 4px dots marking the corners of a bordered frame — used by the Add Projects picker list. */
+.corner-dot { position: absolute; width: 4px; height: 4px; background: color-mix(in oklab, var(--text-primary) 25%, transparent); z-index: 1; }
+.corner-dot-tl { top: -2.5px; left: -2.5px; }
+.corner-dot-tr { top: -2.5px; right: -2.5px; }
+.corner-dot-bl { bottom: -2.5px; left: -2.5px; }
+.corner-dot-br { bottom: -2.5px; right: -2.5px; }
 
-/* min-width:0 lets the grid/flex children clip; without it, unbreakable content forces
-   the column wider than minmax(200px, 1fr) and the path/name spill outside the card. */
-.project-card { background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 12px; cursor: pointer; transition: all 0.15s ease; min-width: 0; }
-.project-card:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+/* Recent Projects — compact pills instead of cards: the project's own identity icon
+   (same emoji/color/initials as the sidebar and tabs) plus the name. Full path lives in
+   the tooltip. Pills whose project has open terminal tabs are highlighted with a green
+   tint and carry the same active-session count badge as the sidebar. */
+.project-pills { display: flex; flex-wrap: wrap; gap: 7px; }
+.project-pill { display: inline-flex; align-items: center; gap: 8px; padding: 5px 13px 5px 5px; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 999px; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; min-width: 0; }
+.project-pill:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+/* Inactive projects stay quiet (gray name, brightening on hover); only pills with open
+   tabs get the full-contrast white name alongside the green tint. */
+.project-pill-name { font-size: 12px; font-weight: 500; color: var(--text-secondary); white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis; transition: color 0.15s ease; }
+.project-pill:hover .project-pill-name { color: var(--text-primary); }
+.project-pill.is-active .project-pill-name { color: var(--text-primary); }
+.project-pill.is-active { background: color-mix(in oklab, var(--success) 8%, var(--bg-card)); border-color: color-mix(in oklab, var(--success) 28%, var(--border-default)); }
+.project-pill.is-active:hover { background: color-mix(in oklab, var(--success) 14%, var(--bg-card)); border-color: color-mix(in oklab, var(--success) 45%, var(--border-default)); }
+/* Inline twin of the sidebar's .ds-active-badge — open terminal tabs in this project. */
+.project-pill-badge { min-width: 15px; height: 15px; padding: 0 4px; margin-right: -5px; background: var(--success); color: #fff; font-size: 9px; font-weight: 700; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.project-pill-more { padding: 5px 13px; font-size: 11px; font-family: inherit; color: var(--text-tertiary); }
+.project-pill-more:hover { color: var(--text-primary); }
 
-.project-card-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; min-width: 0; }
-.project-card-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-terracotta); flex-shrink: 0; }
-.project-card-name { font-size: 12px; font-weight: 500; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
-.project-card-tag { font-size: 9px; color: var(--text-muted); background: var(--bg-elevated); padding: 1px 5px; border-radius: 3px; margin-left: auto; flex-shrink: 0; }
+/* ── Usage strip (home dashboard) ─────────────────────────────────── */
+/* One card per agent: cost / activity stats on the left of the body, rate-limit gauges in
+   the head. Cards share the project-card visual language (bg-card, hairline, radius-md). */
 
-.project-card-path { font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.usage-strip { display: flex; gap: 8px; margin-bottom: 20px; }
+.usage-card { flex: 1; min-width: 0; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 10px 12px; }
+.usage-card-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.usage-card-title { font-size: 11px; font-weight: 600; color: var(--text-secondary); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.usage-card-openai { display: flex; align-items: center; color: var(--text-secondary); }
+
+.usage-gauges { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.usage-gauge { display: flex; align-items: center; gap: 5px; }
+.usage-gauge-label { font-size: 9px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.3px; }
+.usage-gauge-track { width: 44px; height: 4px; background: var(--bg-deep); border-radius: 2px; overflow: hidden; }
+.usage-gauge-fill { height: 100%; border-radius: 2px; transition: width 0.3s ease; }
+.usage-gauge-pct { font-size: 9px; font-weight: 700; font-family: var(--font-mono); }
+.usage-gauge-ok   .usage-gauge-fill { background: var(--success); }            .usage-gauge-ok   .usage-gauge-pct { color: var(--success); }
+.usage-gauge-warn .usage-gauge-fill { background: #E5A823; }                   .usage-gauge-warn .usage-gauge-pct { color: #E5A823; }
+.usage-gauge-hot  .usage-gauge-fill { background: var(--accent-terracotta); }  .usage-gauge-hot  .usage-gauge-pct { color: var(--accent-terracotta); }
+
+.usage-card-body { display: flex; align-items: flex-end; gap: 18px; min-height: 30px; }
+.usage-stat { display: flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+.usage-stat-value { font-size: 17px; font-weight: 600; color: var(--text-primary); font-family: var(--font-mono); line-height: 1; }
+.usage-stat-label { font-size: 10px; color: var(--text-tertiary); }
+
+/* 14-day cost sparkline — right-aligned, bottom-anchored mini bars; today gets the accent. */
+.usage-spark { display: flex; align-items: flex-end; gap: 2px; height: 28px; margin-left: auto; }
+.usage-spark-bar { width: 5px; min-height: 2px; background: color-mix(in oklab, var(--text-muted) 45%, transparent); border-radius: 1px; transition: background 0.12s; }
+.usage-spark-bar:hover { background: var(--text-secondary); }
+.usage-spark-bar.is-today { background: var(--accent-terracotta); }
+
+.usage-connect { margin-left: auto; padding: 4px 10px; font-size: 10px; }
+.usage-asof { margin-left: auto; font-size: 9px; color: var(--text-muted); white-space: nowrap; }
+.usage-empty { font-size: 11px; color: var(--text-muted); }
 
 /* Session List */
 .session-list { display: flex; flex-direction: column; gap: 2px; }
@@ -504,6 +563,7 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .session-model-opus    { background: color-mix(in oklab, var(--accent-terracotta) 22%, var(--bg-elevated)); color: var(--accent-terracotta); }
 .session-model-sonnet  { background: color-mix(in oklab, #3498DB 22%, var(--bg-elevated)); color: #7CBBE6; }
 .session-model-haiku   { background: var(--bg-elevated); color: var(--text-tertiary); }
+.session-model-gpt     { background: color-mix(in oklab, #10A37F 20%, var(--bg-elevated)); color: #58C4A3; }
 .session-model-unknown { background: var(--bg-elevated); color: var(--text-muted); }
 
 /* Context mini-bar: fixed-width track, colored fill that grows with percentage. The color
@@ -554,6 +614,8 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 
 .session-item-prompt { color: var(--accent-terracotta); font-family: var(--font-mono); font-size: 12px; font-weight: 500; opacity: 0.5; flex-shrink: 0; transition: opacity 0.15s ease; }
 .session-item:hover .session-item-prompt { opacity: 0.8; }
+/* Agents whose mark draws with currentColor get a neutral tint, not the terracotta accent. */
+.session-item-prompt-neutral { color: var(--text-secondary); }
 
 .session-count-badge { font-size: 10px; color: var(--text-muted); }
 
@@ -794,7 +856,7 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 /* Inline action button used on Settings rows that open a sub-dialog (e.g. wizard). */
 .settings-action-btn { padding: 4px 10px; font-size: 11px; gap: 5px; }
 
-/* Hero card at the top of the Connect tab — short pitch + a primary "Connect" CTA when the
+/* Hero card in the Claude Code block on the Agents tab — short pitch + a primary "Connect" CTA when the
    user hasn't set the statusline up yet. Once connected the CTA hides and the message flips
    to confirmation copy. Sits above the regular Section rows. */
 .settings-connect-hero { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; margin-bottom: 16px; background: color-mix(in oklab, var(--accent-terracotta) 10%, var(--bg-card)); border: 1px solid color-mix(in oklab, var(--accent-terracotta) 30%, var(--border-default)); border-radius: var(--radius-md); }
@@ -803,6 +865,26 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .settings-connect-hero-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; }
 .settings-connect-hero-sub { font-size: 11px; color: var(--text-secondary); line-height: 1.5; }
 .settings-connect-cta { flex-shrink: 0; padding: 6px 12px; font-size: 11px; gap: 5px; align-self: center; }
+/* Agents tab — one block per supported CLI agent (Claude Code, Codex). The header card
+   carries identity (icon, name, resolved binary path) plus a live found / not-found chip
+   sourced from detect_agent_binary. */
+.settings-agent-block { margin-bottom: 20px; }
+.settings-agent-header { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.settings-agent-header:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.settings-agent-chevron { color: var(--text-tertiary); transition: transform 0.15s; flex-shrink: 0; }
+.settings-agent-header.is-open .settings-agent-chevron { transform: rotate(90deg); }
+.settings-agent-body { padding-top: 14px; }
+.settings-agent-icon { width: 32px; height: 32px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--bg-elevated); color: var(--text-secondary); border-radius: 8px; }
+.settings-agent-text { flex: 1; min-width: 0; }
+.settings-agent-name { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; }
+.settings-agent-sub { font-size: 11px; color: var(--text-tertiary); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-agent-path { font-family: var(--font-mono); font-size: 10px; }
+.settings-agent-header .settings-version-chip { flex-shrink: 0; }
+/* Neutral chip variant for "checking…" and "not found" — deliberately not red: a missing
+   optional agent isn't an error state. */
+.settings-version-chip-muted { background: var(--bg-elevated); color: var(--text-tertiary); border: 1px solid var(--border-default); }
+.settings-agent-empty { font-size: 11px; color: var(--text-tertiary); line-height: 1.5; padding: 2px 2px 14px; }
+.settings-agent-empty code { font-family: var(--font-mono); font-size: 10px; color: var(--accent-terracotta); background: var(--bg-elevated); padding: 0 4px; border-radius: 3px; }
 /* About → Version row: monospaced version number + status chip + refresh button. */
 .settings-version-row { display: flex; align-items: center; gap: 10px; }
 .settings-version-current { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); }
@@ -1186,13 +1268,13 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .home-scroll-enter .session-list > .session-item:nth-child(6) { animation-delay: 125ms; }
 .home-scroll-enter .session-list > .session-item:nth-child(n+7) { animation-delay: 150ms; }
 
-.project-cards .project-card { animation: sessionEnter 0.28s cubic-bezier(.22,.61,.36,1) backwards; }
-.project-cards .project-card:nth-child(1) { animation-delay: 0ms; }
-.project-cards .project-card:nth-child(2) { animation-delay: 30ms; }
-.project-cards .project-card:nth-child(3) { animation-delay: 60ms; }
-.project-cards .project-card:nth-child(4) { animation-delay: 90ms; }
-.project-cards .project-card:nth-child(5) { animation-delay: 120ms; }
-.project-cards .project-card:nth-child(n+6) { animation-delay: 140ms; }
+.project-pills .project-pill { animation: sessionEnter 0.28s cubic-bezier(.22,.61,.36,1) backwards; }
+.project-pills .project-pill:nth-child(1) { animation-delay: 0ms; }
+.project-pills .project-pill:nth-child(2) { animation-delay: 30ms; }
+.project-pills .project-pill:nth-child(3) { animation-delay: 60ms; }
+.project-pills .project-pill:nth-child(4) { animation-delay: 90ms; }
+.project-pills .project-pill:nth-child(5) { animation-delay: 120ms; }
+.project-pills .project-pill:nth-child(n+6) { animation-delay: 140ms; }
 
 /* Preview collapses via pure CSS — no per-frame React updates → no lag.
    max-height is large enough to cover any natural content height. */
@@ -1466,33 +1548,60 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .icon-picker-image-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 
 /* ── Project Picker Modal ─────────────────────────────────────────── */
+/* Add Projects dialog. Hairline borders, a terracotta label band, mono paths and chips,
+   grid-line rows (borders instead of gaps), corner dots on the list frame, and a dashed
+   footer separator. */
 
-.picker-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; animation: fadeIn 0.15s ease; }
+.picker-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; z-index: 1000; animation: fadeIn 0.15s ease; }
 
-.picker { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-lg); width: 420px; max-height: 480px; display: flex; flex-direction: column; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4); }
+.picker { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); width: 540px; max-width: 92vw; max-height: min(620px, 86vh); display: flex; flex-direction: column; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); animation: scaleIn 0.16s ease; }
 
-.picker-header { padding: 14px 16px 2px; font-size: 14px; font-weight: 500; color: var(--text-primary); }
-.picker-desc { padding: 0 16px 10px; font-size: 10px; color: var(--text-muted); }
+.picker-band { padding: 9px 16px; border-bottom: 1px solid var(--border-default); background: var(--bg-deep); border-radius: var(--radius-md) var(--radius-md) 0 0; }
+.picker-band-label { font-size: 10px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--accent-terracotta); }
 
-.picker-list { flex: 1; overflow-y: auto; padding: 0 8px; min-height: 0; }
+.picker-head { padding: 14px 16px 12px; }
+.picker-title { font-size: 14px; font-weight: 500; letter-spacing: -0.02em; color: var(--text-primary); margin-bottom: 3px; }
+.picker-sub { font-size: 11px; color: var(--text-tertiary); line-height: 1.5; }
 
-.picker-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: var(--radius-md); cursor: pointer; transition: all 0.1s; }
+.picker-search { display: flex; align-items: center; gap: 8px; margin: 0 16px 10px; padding: 6px 10px; background: var(--bg-deep); border: 1px solid var(--border-default); border-radius: var(--radius-sm); color: var(--text-muted); }
+.picker-search input { flex: 1; background: transparent; border: 0; outline: none; color: var(--text-primary); font-size: 11px; font-family: inherit; }
+.picker-search input::placeholder { color: var(--text-muted); }
+.picker-search:focus-within { border-color: var(--border-strong); }
+
+/* List frame — corner dots come from the shared .corner-dot classes. */
+.picker-listwrap { position: relative; margin: 0 16px; border: 1px solid var(--border-default); display: flex; flex-direction: column; min-height: 0; }
+
+.picker-list { flex: 1; overflow-y: auto; min-height: 0; }
+
+.picker-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); cursor: pointer; transition: background 0.1s; }
+.picker-item:last-child { border-bottom: none; }
 .picker-item:hover { background: var(--bg-hover); }
+.picker-item.checked { background: color-mix(in oklab, var(--accent-terracotta) 6%, transparent); }
+.picker-item.checked:hover { background: color-mix(in oklab, var(--accent-terracotta) 10%, transparent); }
 
-.picker-check { width: 18px; height: 18px; border-radius: 4px; border: 1.5px solid var(--border-strong); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: transparent; transition: all 0.1s; }
+.picker-check { width: 16px; height: 16px; border-radius: 3px; border: 1.5px solid var(--border-strong); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: transparent; transition: all 0.1s; }
 .picker-item.checked .picker-check { background: var(--accent-terracotta); border-color: var(--accent-terracotta); color: white; }
 
-.picker-folder-icon { color: var(--text-muted); flex-shrink: 0; }
-
 .picker-item-info { min-width: 0; flex: 1; }
-.picker-item-name { font-size: 12px; font-weight: 450; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.picker-item-path { font-size: 9px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.picker-item-name { font-size: 12px; font-weight: 500; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.picker-item-path { font-family: var(--font-mono); font-size: 9px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
 
-.picker-item-count { font-size: 10px; color: var(--text-muted); flex-shrink: 0; padding: 1px 6px; background: var(--bg-elevated); border-radius: 8px; }
+/* Which agent(s) have sessions in this directory — small framed marks, then a mono total. */
+.picker-item-agents { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.picker-agent { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 3px; color: var(--text-secondary); }
+.picker-item-count { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); flex-shrink: 0; padding: 2px 6px; margin-left: 4px; background: var(--bg-deep); border: 1px solid var(--border-default); border-radius: 3px; min-width: 26px; text-align: center; }
 
-.picker-empty { padding: 20px; text-align: center; color: var(--text-muted); font-size: 11px; }
+.picker-empty { padding: 24px; text-align: center; color: var(--text-muted); font-size: 11px; }
 
-.picker-footer { padding: 10px 12px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; }
+/* Agent chooser for new chats — only ever shown with 2+ agents installed and no default. */
+.agent-picker { width: 380px; }
+.agent-picker-options { display: flex; gap: 8px; margin: 0 16px; }
+.agent-picker-option { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px 10px; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); color: var(--text-primary); font-size: 12px; font-weight: 500; font-family: inherit; cursor: pointer; transition: all 0.15s ease; }
+.agent-picker-option:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.agent-picker-neutral { display: flex; color: var(--text-secondary); }
+
+.picker-footer { padding: 12px 16px; margin-top: 12px; border-top: 1px dashed var(--border-default); display: flex; align-items: center; gap: 8px; }
+.picker-footer-hint { flex: 1; font-size: 10px; color: var(--text-muted); }
 
 /* ── Utilities ────────────────────────────────────────────────────── */
 

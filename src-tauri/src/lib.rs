@@ -60,6 +60,10 @@ pub struct SessionInfo {
     // Per-day token breakdown keyed by YYYY-MM-DD. Each value is [input, cache_creation,
     // cache_read, output] so the UI can render a stacked area chart with the four bands.
     pub daily_tokens: std::collections::BTreeMap<String, [u64; 4]>,
+    // Which coding agent produced this session: "claude" (JSONL under ~/.claude/projects)
+    // or "codex" (rollout under ~/.codex/sessions). Drives the row icon, model formatting,
+    // and which resume command a terminal tab spawns.
+    pub agent: String,
 }
 
 // ── State ──────────────────────────────────────────────────────────────
@@ -407,11 +411,125 @@ fn parse_session(path: &std::path::Path, project_name: &str, project_path: &str)
     // that haven't produced a user/assistant line yet.
     let timestamp = if last_message_ts.is_empty() { mtime_iso } else { last_message_ts };
 
-    let info = SessionInfo { id: session_id, title: display_title, timestamp, message_count, project_name: project_name.to_string(), project_path: project_path.to_string(), git_branch, claude_version, tool_use_count, duration_ms, model: model_out, context_tokens, context_limit, cost_usd, is_authoritative_stats, daily_cost, rate_limit_5h_pct, rate_limit_7d_pct, total_input_tokens, total_cache_creation_tokens, total_cache_read_tokens, total_output_tokens, daily_tokens };
+    let info = SessionInfo { id: session_id, title: display_title, timestamp, message_count, project_name: project_name.to_string(), project_path: project_path.to_string(), git_branch, claude_version, tool_use_count, duration_ms, model: model_out, context_tokens, context_limit, cost_usd, is_authoritative_stats, daily_cost, rate_limit_5h_pct, rate_limit_7d_pct, total_input_tokens, total_cache_creation_tokens, total_cache_read_tokens, total_output_tokens, daily_tokens, agent: "claude".into() };
     if let Ok(mut cache) = session_cache().lock() {
         cache.insert(path.to_path_buf(), SessionCacheEntry { jsonl_mtime: modified, stats_mtime, project_path: project_path.to_string(), info: info.clone() });
     }
     Some(info)
+}
+
+// ── Codex session parsing ─────────────────────────────────────────────
+// Codex rollouts (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl) parse into the same
+// SessionInfo shape Claude sessions use. Mapping notes: title = first user message (Codex
+// has no /rename or auto-summary), model from the latest turn_context, context usage from
+// the latest token_count's last_token_usage (the final turn's prompt+completion ≈ current
+// conversation size), claude_version carries Codex's cli_version. Cost stays 0 — Codex
+// subscription plans have no per-use cost — while is_authoritative_stats is true so the
+// context bar renders: the numbers come from Codex itself, not an estimate.
+
+fn codex_rollout_files() -> Vec<std::path::PathBuf> {
+    let Some(home) = dirs::home_dir() else { return vec![] };
+    let mut files = vec![];
+    let mut stack = vec![home.join(".codex").join("sessions")];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).ok().into_iter().flatten().flatten() {
+            let p = entry.path();
+            if entry.file_type().map_or(false, |ft| ft.is_dir()) { stack.push(p); continue; }
+            if p.extension().map_or(false, |ext| ext == "jsonl") { files.push(p); }
+        }
+    }
+    files
+}
+
+fn parse_codex_session(path: &std::path::Path) -> Option<SessionInfo> {
+    let content = fs::read_to_string(path).ok()?;
+
+    let mut session_id = String::new();
+    let mut cwd = String::new();
+    let mut git_branch = String::new();
+    let mut cli_version = String::new();
+    let mut model = String::new();
+    let mut first_user_message = String::new();
+    let mut message_count = 0usize;
+    let mut context_tokens = 0u64;
+    let mut context_limit = 0u64;
+    let mut last_ts = String::new();
+    // Token accounting: total_token_usage snapshots are cumulative and monotonic, so the
+    // per-day buckets come from diffing consecutive snapshots (robust against Codex writing
+    // several token_count events per turn). Band mapping onto Claude's [input,
+    // cache_creation, cache_read, output]: non-cached input, 0 (no such concept), cached
+    // input, output (already includes reasoning tokens — total = input + output holds).
+    let mut daily_tokens: std::collections::BTreeMap<String, [u64; 4]> = Default::default();
+    let mut prev_totals: (u64, u64, u64) = (0, 0, 0); // (input, cached_input, output)
+    let mut last_totals: (u64, u64, u64) = (0, 0, 0);
+
+    for line in content.lines() {
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if let Some(ts) = json.get("timestamp").and_then(|v| v.as_str()) { last_ts = ts.to_string(); }
+        let Some(payload) = json.get("payload") else { continue };
+        match json.get("type").and_then(|v| v.as_str()) {
+            Some("session_meta") => {
+                session_id = payload.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                cwd = payload.get("cwd").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                cli_version = payload.get("cli_version").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                git_branch = payload.get("git").and_then(|g| g.get("branch")).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            }
+            Some("turn_context") => {
+                if let Some(m) = payload.get("model").and_then(|v| v.as_str()) { model = m.to_string(); }
+            }
+            Some("event_msg") => match payload.get("type").and_then(|v| v.as_str()) {
+                Some("user_message") => {
+                    message_count += 1;
+                    if first_user_message.is_empty() {
+                        if let Some(m) = payload.get("message").and_then(|v| v.as_str()) {
+                            first_user_message = m.trim().replace('\n', " ").chars().take(120).collect();
+                        }
+                    }
+                }
+                Some("token_count") => {
+                    if let Some(info) = payload.get("info") {
+                        if let Some(last) = info.get("last_token_usage") {
+                            let turn = last.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) + last.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            if turn > 0 { context_tokens = turn; }
+                        }
+                        if let Some(w) = info.get("model_context_window").and_then(|v| v.as_u64()) { context_limit = w; }
+                        if let Some(totals) = info.get("total_token_usage") {
+                            let input = totals.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let cached = totals.get("cached_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let output = totals.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let (d_input, d_cached, d_output) = (input.saturating_sub(prev_totals.0), cached.saturating_sub(prev_totals.1), output.saturating_sub(prev_totals.2));
+                            if (d_input + d_output > 0) && last_ts.len() >= 10 {
+                                let day = daily_tokens.entry(last_ts[..10].to_string()).or_insert([0, 0, 0, 0]);
+                                day[0] += d_input.saturating_sub(d_cached);
+                                day[2] += d_cached;
+                                day[3] += d_output;
+                            }
+                            prev_totals = (input, cached, output);
+                            last_totals = (input, cached, output);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    if session_id.is_empty() || cwd.is_empty() { return None; }
+    let timestamp = if last_ts.is_empty() { fs::metadata(path).ok().and_then(|m| m.modified().ok()).map(system_time_to_iso).unwrap_or_default() } else { last_ts };
+    let project_name = std::path::Path::new(&cwd).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| cwd.clone());
+    let title = if first_user_message.is_empty() { format!("Session {}", &session_id[..8.min(session_id.len())]) } else { first_user_message };
+
+    Some(SessionInfo {
+        id: session_id, title, timestamp, message_count, project_name, project_path: cwd,
+        git_branch, claude_version: cli_version, tool_use_count: 0, duration_ms: 0,
+        model, context_tokens, context_limit,
+        cost_usd: 0.0, is_authoritative_stats: true,
+        daily_cost: Default::default(), rate_limit_5h_pct: None, rate_limit_7d_pct: None,
+        total_input_tokens: last_totals.0.saturating_sub(last_totals.1), total_cache_creation_tokens: 0, total_cache_read_tokens: last_totals.1, total_output_tokens: last_totals.2,
+        daily_tokens,
+        agent: "codex".into(),
+    })
 }
 
 // ── Commands ───────────────────────────────────────────────────────────
@@ -480,39 +598,47 @@ fn list_claude_projects() -> Vec<ProjectInfo> {
 
 #[tauri::command]
 fn get_sessions(encoded_name: String) -> Vec<SessionInfo> {
-    let projects_dir = match get_claude_projects_dir() {
-        Some(d) => d,
-        None => return vec![],
-    };
+    let mut sessions: Vec<SessionInfo> = vec![];
 
-    let project_dir = projects_dir.join(&encoded_name);
-    if !project_dir.exists() { return vec![]; }
-
-    // Get project path from first JSONL
-    let mut project_path = String::new();
-    let mut project_name = String::new();
-    for e in fs::read_dir(&project_dir).ok().into_iter().flatten().flatten() {
-        let p = e.path();
-        if p.extension().map_or(true, |ext| ext != "jsonl") { continue; }
-        if let Ok(file) = fs::File::open(&p) {
-            for line in BufReader::new(file).lines().take(30).flatten() {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-                    if let Some(c) = json.get("cwd").and_then(|c| c.as_str()) {
-                        project_path = c.to_string();
-                        project_name = std::path::Path::new(c).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                        break;
+    // Claude sessions live under ~/.claude/projects/<encoded_name>/. A project can be
+    // Codex-only (no such directory) — that must not short-circuit the Codex pass below.
+    if let Some(project_dir) = get_claude_projects_dir().map(|d| d.join(&encoded_name)) {
+        if project_dir.exists() {
+            // Get project path from first JSONL
+            let mut project_path = String::new();
+            let mut project_name = String::new();
+            for e in fs::read_dir(&project_dir).ok().into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.extension().map_or(true, |ext| ext != "jsonl") { continue; }
+                if let Ok(file) = fs::File::open(&p) {
+                    for line in BufReader::new(file).lines().take(30).flatten() {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+                            if let Some(c) = json.get("cwd").and_then(|c| c.as_str()) {
+                                project_path = c.to_string();
+                                project_name = std::path::Path::new(c).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                                break;
+                            }
+                        }
                     }
                 }
+                if !project_path.is_empty() { break; }
             }
+
+            sessions.extend(fs::read_dir(&project_dir).ok().into_iter().flatten().flatten().filter_map(|e| {
+                let p = e.path();
+                if p.extension().map_or(true, |ext| ext != "jsonl") { return None; }
+                parse_session(&p, &project_name, &project_path)
+            }));
         }
-        if !project_path.is_empty() { break; }
     }
 
-    let mut sessions: Vec<SessionInfo> = fs::read_dir(&project_dir).ok().into_iter().flatten().flatten().filter_map(|e| {
-        let p = e.path();
-        if p.extension().map_or(true, |ext| ext != "jsonl") { return None; }
-        parse_session(&p, &project_name, &project_path)
-    }).collect();
+    // Codex sessions have no per-project directory — match rollouts whose recorded cwd
+    // encodes to the same project directory name Claude would use.
+    for p in codex_rollout_files() {
+        if let Some(s) = parse_codex_session(&p) {
+            if encode_project_name(&s.project_path) == encoded_name { sessions.push(s); }
+        }
+    }
 
     sessions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     sessions
@@ -520,14 +646,12 @@ fn get_sessions(encoded_name: String) -> Vec<SessionInfo> {
 
 #[tauri::command]
 fn get_all_recent_sessions(limit: usize) -> Vec<SessionInfo> {
-    let projects_dir = match get_claude_projects_dir() {
-        Some(d) if d.exists() => d,
-        _ => return vec![],
-    };
-
     let mut all_sessions: Vec<SessionInfo> = vec![];
 
-    for entry in fs::read_dir(&projects_dir).ok().into_iter().flatten().flatten() {
+    // A machine can have Codex sessions but no ~/.claude/projects (or vice versa) — each
+    // agent's pass is independent.
+    let projects_dir = get_claude_projects_dir().filter(|d| d.exists());
+    for entry in projects_dir.iter().flat_map(|d| fs::read_dir(d).ok().into_iter().flatten().flatten()) {
         if !entry.file_type().map_or(false, |ft| ft.is_dir()) { continue; }
 
         let project_dir = entry.path();
@@ -562,6 +686,9 @@ fn get_all_recent_sessions(limit: usize) -> Vec<SessionInfo> {
             }
         }
     }
+
+    // Codex sessions across all directories — same recency pool as the Claude ones.
+    all_sessions.extend(codex_rollout_files().iter().filter_map(|p| parse_codex_session(p)));
 
     all_sessions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     all_sessions.truncate(limit);
@@ -1531,22 +1658,32 @@ const MAX_PENDING: usize = 4 * 1024 * 1024;
 const OVERFLOW_NOTICE: &[u8] = b"\x1bc\x1b[2m[xshell: dropped output due to backpressure]\x1b[0m\r\n";
 
 #[tauri::command]
-fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>, fullscreen_rendering: Option<bool>, force_sync_output: Option<bool>, on_data: Channel<Response>, on_exit: Channel<i32>) -> Result<(), String> {
+fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<String>, cwd: String, cols: u16, rows: u16, shell_mode: Option<String>, shell_command: Option<String>, shell_id: Option<String>, agent: Option<String>, fullscreen_rendering: Option<bool>, force_sync_output: Option<bool>, on_data: Channel<Response>, on_exit: Channel<i32>) -> Result<(), String> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| format!("Failed to open PTY: {}", e))?;
 
     let mode = shell_mode.as_deref().unwrap_or("claude");
-    // New chats arrive with a pre-allocated UUID and no JSONL on disk → use `--session-id` so
-    // Claude creates the session under our UUID (and leaves customTitle empty so ai-title can
-    // fire). Existing sessions have a JSONL on disk → `--resume` instead.
-    let claude_args: Vec<String> = {
+    // Which agent CLI this tab hosts. Codex tabs only ever open from an existing rollout,
+    // so their resume form is fixed; everything else (shell wrapping, PTY plumbing) is
+    // agent-agnostic and shared.
+    let agent_bin = if agent.as_deref() == Some("codex") { "codex" } else { "claude" };
+    // Claude: new chats arrive with a pre-allocated UUID and no JSONL on disk → use
+    // `--session-id` so Claude creates the session under our UUID (and leaves customTitle
+    // empty so ai-title can fire). Existing sessions have a JSONL on disk → `--resume`.
+    // Codex: `codex resume <id>`.
+    let agent_args: Vec<String> = {
         let mut v = Vec::new();
         if let Some(ref sid) = session_id {
-            let jsonl_exists = get_claude_projects_dir()
-                .map(|d| d.join(encode_project_name(&cwd)).join(format!("{}.jsonl", sid)).exists())
-                .unwrap_or(false);
-            v.push(if jsonl_exists { "--resume".into() } else { "--session-id".into() });
-            v.push(sid.clone());
+            if agent_bin == "codex" {
+                v.push("resume".into());
+                v.push(sid.clone());
+            } else {
+                let jsonl_exists = get_claude_projects_dir()
+                    .map(|d| d.join(encode_project_name(&cwd)).join(format!("{}.jsonl", sid)).exists())
+                    .unwrap_or(false);
+                v.push(if jsonl_exists { "--resume".into() } else { "--session-id".into() });
+                v.push(sid.clone());
+            }
         }
         v
     };
@@ -1565,8 +1702,8 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
         let shell = effective_shell.unwrap_or_else(|| if cfg!(windows) { "powershell.exe" } else { "bash" });
         CommandBuilder::new(shell)
     } else if let Some(shell) = effective_shell.filter(|s| !s.is_empty()) {
-        // Claude mode with an explicit host shell: launch the shell and run `claude` inside it
-        // so the user's preferred shell wraps the session (and stays alive after claude exits).
+        // Agent mode with an explicit host shell: launch the shell and run the agent inside it
+        // so the user's preferred shell wraps the session (and stays alive after the agent exits).
         match shell_kind {
             "powershell" | "pwsh" => {
                 let mut c = CommandBuilder::new(shell);
@@ -1574,16 +1711,16 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
                 c.arg("-NoExit");
                 c.arg("-Command");
                 // & 'claude' 'arg1' 'arg2' — single-quoted to avoid PS expansion surprises.
-                let mut s = String::from("& 'claude'");
-                for a in &claude_args { s.push(' '); s.push('\''); s.push_str(&a.replace('\'', "''")); s.push('\''); }
+                let mut s = format!("& '{}'", agent_bin);
+                for a in &agent_args { s.push(' '); s.push('\''); s.push_str(&a.replace('\'', "''")); s.push('\''); }
                 c.arg(s);
                 c
             }
             "cmd" => {
                 let mut c = CommandBuilder::new(shell);
                 c.arg("/K");
-                c.arg("claude");
-                for a in &claude_args { c.arg(a); }
+                c.arg(agent_bin);
+                for a in &agent_args { c.arg(a); }
                 c
             }
             "gitbash" | "bash" | "zsh" | "fish" => {
@@ -1592,9 +1729,9 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
                 c.arg("-i");
                 c.arg("-c");
                 fn q(s: &str) -> String { format!("'{}'", s.replace('\'', "'\\''")) }
-                let mut s = String::from("claude");
-                for a in &claude_args { s.push(' '); s.push_str(&q(a)); }
-                // Keep the shell alive after claude exits so the user retains a prompt.
+                let mut s = String::from(agent_bin);
+                for a in &agent_args { s.push(' '); s.push_str(&q(a)); }
+                // Keep the shell alive after the agent exits so the user retains a prompt.
                 let basename = std::path::Path::new(shell).file_stem().and_then(|o| o.to_str()).unwrap_or("bash");
                 s.push_str(&format!("; exec {} -i", basename));
                 c.arg(s);
@@ -1605,12 +1742,12 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
                 if cfg!(windows) {
                     let mut c = CommandBuilder::new("cmd.exe");
                     c.arg("/C");
-                    c.arg("claude");
-                    for a in &claude_args { c.arg(a); }
+                    c.arg(agent_bin);
+                    for a in &agent_args { c.arg(a); }
                     c
                 } else {
-                    let mut c = CommandBuilder::new("claude");
-                    for a in &claude_args { c.arg(a); }
+                    let mut c = CommandBuilder::new(agent_bin);
+                    for a in &agent_args { c.arg(a); }
                     c
                 }
             }
@@ -1618,12 +1755,12 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
     } else if cfg!(windows) {
         let mut c = CommandBuilder::new("cmd.exe");
         c.arg("/C");
-        c.arg("claude");
-        for a in &claude_args { c.arg(a); }
+        c.arg(agent_bin);
+        for a in &agent_args { c.arg(a); }
         c
     } else {
-        let mut c = CommandBuilder::new("claude");
-        for a in &claude_args { c.arg(a); }
+        let mut c = CommandBuilder::new(agent_bin);
+        for a in &agent_args { c.arg(a); }
         c
     };
     // Tag the terminal so Claude Code's OTEL telemetry attributes sessions to this app
@@ -1633,7 +1770,7 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
     // Claude Code's flicker-free / alternate-screen-buffer renderer is opt-in via env var.
     // Default ON for any claude-mode spawn; raw shells don't get it (no claude process to read it).
     // Inherited by the wrapping shell → claude child, so setting it here is sufficient.
-    if mode != "raw" && fullscreen_rendering.unwrap_or(true) {
+    if mode != "raw" && agent_bin == "claude" && fullscreen_rendering.unwrap_or(true) {
         cmd.env("CLAUDE_CODE_NO_FLICKER", "1");
     }
     // Force synchronized output mode (DEC 2026). Claude's auto-detection looks at $TERM
@@ -1641,7 +1778,7 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
     // natively. With this flag, claude wraps each TUI frame in \x1b[?2026h..\x1b[?2026l
     // so xterm renders only complete frames — fixes the "flying letters" residue we get
     // when xterm sees half-drawn frames. Requires Claude Code ≥ 2.1.129.
-    if mode != "raw" && force_sync_output.unwrap_or(true) {
+    if mode != "raw" && agent_bin == "claude" && force_sync_output.unwrap_or(true) {
         cmd.env("CLAUDE_CODE_FORCE_SYNC_OUTPUT", "1");
     }
     // Empty cwd → fall back to the user's home directory (raw shells launched from home view).
@@ -1875,6 +2012,338 @@ fn get_global_rate_limits() -> GlobalRateLimits {
     out
 }
 
+// ── Codex project context ─────────────────────────────────────────────
+// What the context tree shows for Codex. Returned as GENERIC titled sections rather than
+// Codex-specific fields — the frontend renders sections without knowing the agent, which
+// is the pattern every future agent's context command should follow (Claude's richer
+// panel predates this and stays bespoke).
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AgentContextItem {
+    pub name: String,
+    pub detail: String, // secondary line (scope, command, …); empty when none
+    pub path: String,   // openable file path; empty when not file-backed
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AgentContextSection {
+    pub title: String,
+    pub items: Vec<AgentContextItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CodexContext {
+    pub present: bool, // any Codex artifacts found for this project
+    pub trust_level: Option<String>, // from [projects.'<path>'] in config.toml
+    pub sections: Vec<AgentContextSection>,
+}
+
+#[tauri::command]
+fn get_codex_context(project_path: String) -> CodexContext {
+    let home = dirs::home_dir();
+    let mut sections: Vec<AgentContextSection> = vec![];
+
+    // Instructions — AGENTS.md at the project root (plus git root when different) and the
+    // global ~/.codex/AGENTS.md; Codex's counterpart of CLAUDE.md files.
+    let pp = std::path::Path::new(&project_path);
+    let mut candidates: Vec<(std::path::PathBuf, &str)> = vec![(pp.join("AGENTS.md"), "project")];
+    if let Some(root) = find_git_root(pp) {
+        if root.as_path() != pp { candidates.push((root.join("AGENTS.md"), "repo root")); }
+    }
+    if let Some(h) = &home { candidates.push((h.join(".codex").join("AGENTS.md"), "global")); }
+    let instructions: Vec<AgentContextItem> = candidates.into_iter()
+        .filter(|(p, _)| p.exists())
+        .map(|(p, scope)| AgentContextItem { name: "AGENTS.md".into(), detail: scope.into(), path: p.to_string_lossy().into_owned() })
+        .collect();
+    if !instructions.is_empty() { sections.push(AgentContextSection { title: "Instructions".into(), items: instructions }); }
+
+    // Prompts — ~/.codex/prompts/*.md, Codex's slash-command equivalent (always global).
+    if let Some(h) = &home {
+        let mut prompts: Vec<AgentContextItem> = fs::read_dir(h.join(".codex").join("prompts")).ok().into_iter().flatten().flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if p.extension().map_or(true, |ext| ext != "md") { return None; }
+                let stem = p.file_stem()?.to_string_lossy().into_owned();
+                Some(AgentContextItem { name: format!("/{}", stem), detail: "global".into(), path: p.to_string_lossy().into_owned() })
+            })
+            .collect();
+        prompts.sort_by(|a, b| a.name.cmp(&b.name));
+        if !prompts.is_empty() { sections.push(AgentContextSection { title: "Prompts".into(), items: prompts }); }
+    }
+
+    // MCP servers + per-project trust level from ~/.codex/config.toml. The file is simple
+    // enough that a line scan beats pulling in a TOML dependency: section headers carry the
+    // server name / project path, `command =` and `trust_level =` live inside them.
+    let mut mcp_items: Vec<AgentContextItem> = vec![];
+    let mut trust_level: Option<String> = None;
+    if let Some(h) = &home {
+        if let Ok(cfg) = fs::read_to_string(h.join(".codex").join("config.toml")) {
+            let norm_project = project_path.replace('/', "\\").trim_end_matches('\\').to_lowercase();
+            let unquote = |s: &str| s.trim().trim_matches('"').trim_matches('\'').to_string();
+            let mut current_section = String::new();
+            for raw in cfg.lines() {
+                let line = raw.trim();
+                if line.starts_with('[') && line.ends_with(']') {
+                    current_section = line[1..line.len() - 1].trim().to_string();
+                    if let Some(name) = current_section.strip_prefix("mcp_servers.") {
+                        mcp_items.push(AgentContextItem { name: unquote(name), detail: String::new(), path: String::new() });
+                    }
+                    continue;
+                }
+                if current_section.starts_with("mcp_servers.") && line.starts_with("command") {
+                    if let (Some(last), Some(v)) = (mcp_items.last_mut(), line.splitn(2, '=').nth(1)) {
+                        if last.detail.is_empty() { last.detail = unquote(v); }
+                    }
+                } else if let Some(key) = current_section.strip_prefix("projects.") {
+                    let key = unquote(key).replace('/', "\\").trim_end_matches('\\').to_lowercase();
+                    if key == norm_project && line.starts_with("trust_level") {
+                        if let Some(v) = line.splitn(2, '=').nth(1) {
+                            let v = unquote(v);
+                            if !v.is_empty() { trust_level = Some(v); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !mcp_items.is_empty() { sections.push(AgentContextSection { title: "MCP servers".into(), items: mcp_items }); }
+
+    CodexContext { present: !sections.is_empty() || trust_level.is_some(), trust_level, sections }
+}
+
+// ── Home usage strip ──────────────────────────────────────────────────
+// Aggregates for the dashboard strip on the home screen. Claude cost comes from the
+// xshell-stats hook files (authoritative, per-session daily maps summed across sessions);
+// Codex rate limits and activity come straight from the rollout files — Codex needs no
+// hook, every token_count event carries usage + rate-limit data.
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DailyUsd {
+    pub date: String, // YYYY-MM-DD as written by the hook (local date)
+    pub usd: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClaudeCostSummary {
+    // Whether any xshell-stats session files exist — the strip's "hook is set up" signal.
+    pub connected: bool,
+    pub daily: Vec<DailyUsd>, // ascending by date; today/this-week math happens client-side
+}
+
+#[tauri::command]
+fn get_claude_cost_summary() -> ClaudeCostSummary {
+    let Some(home) = dirs::home_dir() else { return ClaudeCostSummary { connected: false, daily: vec![] } };
+    let stats_dir = home.join(".claude").join("xshell-stats");
+
+    let mut connected = false;
+    let mut by_date: HashMap<String, f64> = HashMap::new();
+    for entry in fs::read_dir(&stats_dir).ok().into_iter().flatten().flatten() {
+        if !entry.file_type().map_or(false, |ft| ft.is_file()) { continue; }
+        let Ok(content) = fs::read_to_string(entry.path()) else { continue };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else { continue };
+        connected = true;
+        if let Some(map) = json.get("xshell_daily_cost").and_then(|v| v.as_object()) {
+            for (date, usd) in map {
+                if let Some(u) = usd.as_f64() { *by_date.entry(date.clone()).or_insert(0.0) += u; }
+            }
+        }
+    }
+
+    let mut daily: Vec<DailyUsd> = by_date.into_iter().map(|(date, usd)| DailyUsd { date, usd }).collect();
+    daily.sort_by(|a, b| a.date.cmp(&b.date));
+    ClaudeCostSummary { connected, daily }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CodexRateWindow {
+    pub used_percent: Option<f64>,
+    pub window_minutes: Option<u64>,
+    pub resets_at: Option<u64>, // unix seconds
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DailySessionCount {
+    pub date: String, // YYYY-MM-DD from the sessions/YYYY/MM/DD/ directory layout (local date)
+    pub count: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CodexUsage {
+    pub present: bool, // any rollout files at all
+    pub primary: Option<CodexRateWindow>,   // 5h window
+    pub secondary: Option<CodexRateWindow>, // 7d window
+    pub plan_type: Option<String>,
+    // When the token_count event we read was written — rate limits are only as fresh as the
+    // last Codex run, so the UI shows "as of X ago" instead of presenting them as live.
+    pub rate_limits_updated_iso: Option<String>,
+    pub daily_sessions: Vec<DailySessionCount>,
+}
+
+#[tauri::command]
+fn get_codex_usage() -> CodexUsage {
+    let mut out = CodexUsage { present: false, primary: None, secondary: None, plan_type: None, rate_limits_updated_iso: None, daily_sessions: vec![] };
+    let Some(home) = dirs::home_dir() else { return out };
+    let sessions_dir = home.join(".codex").join("sessions");
+    if !sessions_dir.exists() { return out; }
+
+    // Collect rollout files with their mtime and the local date encoded in the directory path.
+    let mut files: Vec<(std::path::PathBuf, Option<SystemTime>, Option<String>)> = vec![];
+    let mut stack = vec![sessions_dir];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).ok().into_iter().flatten().flatten() {
+            let p = entry.path();
+            if entry.file_type().map_or(false, |ft| ft.is_dir()) { stack.push(p); continue; }
+            if p.extension().map_or(true, |ext| ext != "jsonl") { continue; }
+            let date = (|| {
+                let dd = p.parent()?.file_name()?.to_str()?.to_string();
+                let mm = p.parent()?.parent()?.file_name()?.to_str()?.to_string();
+                let yyyy = p.parent()?.parent()?.parent()?.file_name()?.to_str()?.to_string();
+                if yyyy.len() == 4 && yyyy.chars().all(|c| c.is_ascii_digit()) { Some(format!("{}-{}-{}", yyyy, mm, dd)) } else { None }
+            })();
+            let mtime = fs::metadata(&p).ok().and_then(|m| m.modified().ok());
+            files.push((p, mtime, date));
+        }
+    }
+    if files.is_empty() { return out; }
+    out.present = true;
+
+    let mut by_date: HashMap<String, usize> = HashMap::new();
+    for (_, _, date) in &files {
+        if let Some(d) = date { *by_date.entry(d.clone()).or_insert(0) += 1; }
+    }
+    out.daily_sessions = by_date.into_iter().map(|(date, count)| DailySessionCount { date, count }).collect();
+    out.daily_sessions.sort_by(|a, b| a.date.cmp(&b.date));
+
+    // Rate limits: the last token_count event of the most recently touched rollout that has
+    // one (a just-started session may not have emitted any yet — fall back to the next file).
+    files.sort_by(|a, b| b.1.cmp(&a.1));
+    let parse_window = |w: &serde_json::Value| CodexRateWindow {
+        used_percent: w.get("used_percent").and_then(|v| v.as_f64()),
+        window_minutes: w.get("window_minutes").and_then(|v| v.as_u64()),
+        resets_at: w.get("resets_at").and_then(|v| v.as_u64()),
+    };
+    for (path, _, _) in &files {
+        let Ok(content) = fs::read_to_string(path) else { continue };
+        let Some(line) = content.lines().rev().find(|l| l.contains("\"token_count\"")) else { continue };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let Some(payload) = json.get("payload") else { continue };
+        if payload.get("type").and_then(|t| t.as_str()) != Some("token_count") { continue; }
+        let Some(rl) = payload.get("rate_limits") else { continue };
+        out.primary = rl.get("primary").map(|w| parse_window(w));
+        out.secondary = rl.get("secondary").map(|w| parse_window(w));
+        out.plan_type = rl.get("plan_type").and_then(|v| v.as_str()).map(|s| s.to_string());
+        out.rate_limits_updated_iso = json.get("timestamp").and_then(|v| v.as_str()).map(|s| s.to_string());
+        break;
+    }
+    out
+}
+
+// ── Codex project discovery ───────────────────────────────────────────
+// Codex has no per-project directory layout like ~/.claude/projects — sessions land in
+// ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl and each file's first line is a
+// `session_meta` record carrying the session's cwd. Group by cwd to get the set of
+// directories Codex has been used in, for the Add Projects picker's agent marks.
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CodexProjectInfo {
+    pub path: String,
+    pub session_count: usize,
+    pub last_active: String,
+}
+
+#[tauri::command]
+fn list_codex_projects() -> Vec<CodexProjectInfo> {
+    let Some(home) = dirs::home_dir() else { return vec![] };
+    let sessions_dir = home.join(".codex").join("sessions");
+    if !sessions_dir.exists() { return vec![]; }
+
+    let mut by_cwd: HashMap<String, (usize, Option<SystemTime>)> = HashMap::new();
+    let mut stack = vec![sessions_dir];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).ok().into_iter().flatten().flatten() {
+            let p = entry.path();
+            if entry.file_type().map_or(false, |ft| ft.is_dir()) { stack.push(p); continue; }
+            if p.extension().map_or(true, |ext| ext != "jsonl") { continue; }
+
+            let mut cwd: Option<String> = None;
+            if let Ok(file) = fs::File::open(&p) {
+                let mut first = String::new();
+                if BufReader::new(file).read_line(&mut first).is_ok() {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&first) {
+                        cwd = json.get("payload").and_then(|pl| pl.get("cwd")).and_then(|c| c.as_str()).map(|s| s.to_string());
+                    }
+                }
+            }
+            let Some(cwd) = cwd else { continue };
+
+            let slot = by_cwd.entry(cwd).or_insert((0, None));
+            slot.0 += 1;
+            if let Some(modified) = fs::metadata(&p).ok().and_then(|m| m.modified().ok()) {
+                if slot.1.map_or(true, |prev| modified > prev) { slot.1 = Some(modified); }
+            }
+        }
+    }
+
+    let mut projects: Vec<CodexProjectInfo> = by_cwd.into_iter()
+        .map(|(path, (session_count, latest))| CodexProjectInfo { path, session_count, last_active: latest.map(system_time_to_iso).unwrap_or_default() })
+        .collect();
+    projects.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+    projects
+}
+
+// ── Agent binary detection ────────────────────────────────────────────
+// Settings → Agents shows whether each supported CLI agent is installed on this machine.
+// Resolution goes through `where`/`which` instead of the PTY shell because npm installs
+// agents as `.cmd`/`.ps1` shims on Windows — `where` resolves those reliably, a spawned
+// shell lookup would not. The version probe then runs the binary once with `--version`.
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AgentBinaryProbe {
+    pub installed: bool,
+    pub path: Option<String>,
+    pub version: Option<String>,
+}
+
+#[tauri::command]
+async fn detect_agent_binary(binary: String) -> Result<AgentBinaryProbe, String> {
+    // The name ends up in a process invocation — only accept known agent binaries.
+    if binary != "claude" && binary != "codex" {
+        return Err(format!("Unknown agent binary: {}", binary));
+    }
+    use std::process::Command;
+
+    let mut lookup = if cfg!(target_os = "windows") { Command::new("where") } else { Command::new("which") };
+    lookup.arg(&binary);
+    #[cfg(target_os = "windows")]
+    { use std::os::windows::process::CommandExt; lookup.creation_flags(0x08000000); } // CREATE_NO_WINDOW
+
+    // `where` can return multiple matches (e.g. claude.cmd + claude.ps1) — the first line is
+    // the one PATH order would pick, same as what a terminal would run.
+    let path = lookup.output().ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+        .filter(|s| !s.is_empty());
+
+    let Some(path) = path else { return Ok(AgentBinaryProbe { installed: false, path: None, version: None }) };
+
+    // Version probe is best-effort: a missing/failing `--version` still counts as installed.
+    // On Windows the resolved path is usually an npm `.cmd` shim, which CreateProcess can't
+    // exec directly — route through cmd.exe.
+    #[cfg(target_os = "windows")]
+    let mut ver_cmd = { let mut c = Command::new("cmd"); c.args(["/C", &binary, "--version"]); { use std::os::windows::process::CommandExt; c.creation_flags(0x08000000); } c };
+    #[cfg(not(target_os = "windows"))]
+    let mut ver_cmd = { let mut c = Command::new(&binary); c.arg("--version"); c };
+
+    let version = ver_cmd.output().ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+        .filter(|s| !s.is_empty());
+
+    Ok(AgentBinaryProbe { installed: true, path: Some(path), version })
+}
+
 // ── App Setup ──────────────────────────────────────────────────────────
 
 pub fn run() {
@@ -1884,7 +2353,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState { terminals: Mutex::new(HashMap::new()) })
-        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, spawn_terminal, write_terminal, resize_terminal, close_terminal])
+        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, get_codex_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

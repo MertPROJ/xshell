@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { FolderPlus, Plus, Trash2, GitBranch, Search, ArrowRight, ArrowUp, Pencil, Folder as FolderIcon, ChevronRight, X, FolderOpen, MessageSquare, Sparkles } from "lucide-react";
 import { SkillsPanel } from "./SkillsPanel";
 import { ClaudeChatIcon } from "./ClaudeChatIcon";
+import { AGENTS, AgentIcon } from "../agents";
+import { ttProps } from "./Tooltip";
 import { timeAgo, processSessions } from "../utils";
 import { useProjectImage } from "../hooks/useProjectImage";
 import logo from "../assets/logo.png";
@@ -11,6 +13,7 @@ import type { ProjectInfo, ProjectSettings, SessionFolder, SessionInfo } from ".
 interface HomeViewProps {
   projects: ProjectInfo[];
   allProjects: ProjectInfo[];
+  activeCountByProject: Map<string, number>;
   selectedProject: ProjectInfo | null;
   projectIcons: Record<string, ProjectSettings>;
   recentSessions: SessionInfo[];
@@ -21,6 +24,7 @@ interface HomeViewProps {
   sessionsLoading: boolean;
   contextTreeEnabled: boolean;
   showSessionRowMetrics: boolean;
+  showSessionRowMetricsCodex: boolean;
   showProjectStatsChart: boolean;
   projectStatsView: 'cost' | 'tokens';
   onChangeProjectStatsView: (view: 'cost' | 'tokens') => void;
@@ -81,15 +85,18 @@ function formatModel(raw: string): string {
   if (m.includes("opus")) { const v = pickVersion("opus"); return v ? `Opus ${v}` : "Opus"; }
   if (m.includes("sonnet")) { const v = pickVersion("sonnet"); return v ? `Sonnet ${v}` : "Sonnet"; }
   if (m.includes("haiku")) { const v = pickVersion("haiku"); return v ? `Haiku ${v}` : "Haiku"; }
+  // Codex model ids are already short ("gpt-5.5") — just capitalize the family prefix.
+  if (m.startsWith("gpt")) return raw.replace(/^gpt/i, "GPT");
   return raw;
 }
 
 // Tier class used for color-coding the model badge — "opus" stands out, "haiku" recedes.
-function modelTier(raw: string): "opus" | "sonnet" | "haiku" | "unknown" {
+function modelTier(raw: string): "opus" | "sonnet" | "haiku" | "gpt" | "unknown" {
   const m = raw.toLowerCase();
   if (m.includes("opus")) return "opus";
   if (m.includes("haiku")) return "haiku";
   if (m.includes("sonnet")) return "sonnet";
+  if (m.startsWith("gpt") || m.includes("codex")) return "gpt";
   return "unknown";
 }
 
@@ -375,7 +382,7 @@ function SessionRow({ session, isOpen, groupName, onClick, isDragging, onPointer
       <div className={`session-item-icon ${isOpen ? "session-open" : ""}`}>
         {isOpen && <div className="session-open-dot" />}
       </div>
-      <ClaudeChatIcon size={14} className="session-item-prompt" />
+      <AgentIcon agent={session.agent} size={14} className={`session-item-prompt ${AGENTS[session.agent || "claude"].neutralIcon ? "session-item-prompt-neutral" : ""}`} />
       <div className="session-item-content">
         <div className="session-item-title">{session.title}</div>
         <div className="session-item-meta">
@@ -470,20 +477,29 @@ function ProjectStatsPanel({ sessions, view, onChangeView, costAllowed, tt }: { 
 
   const totalMessages = sessions.reduce((sum, s) => sum + (s.message_count || 0), 0);
 
+  // Cost is a Claude-only concept (Codex plans have no per-use cost), so a project with no
+  // Claude sessions drops the Cost/Tokens toggle entirely and always shows tokens — a
+  // Codex-only user never reads Claude setup copy. Mixed projects keep the toggle and the
+  // cost view names its agent so the dollar figure isn't mistaken for a project total.
+  const hasClaudeSessions = sessions.some(s => s.agent === "claude");
+  const hasCodexSessions = sessions.some(s => s.agent === "codex");
+
   // Reason the Cost button is disabled — surfaced as a tooltip so the user knows what to
   // change to unlock it. We can tell the three causes apart from session data + the costAllowed
-  // prop: if no session has hook data the user hasn't connected, otherwise it's either the
-  // setting being off or just no recorded cost yet.
-  const hasAuthoritativeData = sessions.some(s => s.is_authoritative_stats);
+  // prop: if no Claude session has hook data the user hasn't connected (Codex sessions are
+  // authoritative too but never carry cost, so they don't count here), otherwise it's either
+  // the setting being off or just no recorded cost yet.
+  const hasAuthoritativeData = sessions.some(s => s.agent === "claude" && s.is_authoritative_stats);
   const costDisabledReason = !costAvailable
     ? !hasAuthoritativeData
-      ? "Connect Claude Code in Settings → Connect"
+      ? "Connect Claude Code in Settings → Agents"
       : !costAllowed
-        ? "Enable “Cost chart on project page” in Settings → Connect"
+        ? "Enable “Cost chart on project page” in Settings → Agents"
         : "No recorded cost yet for this project"
     : null;
 
-  const effectiveView: 'cost' | 'tokens' = view === 'cost' && !costAvailable ? 'tokens'
+  const effectiveView: 'cost' | 'tokens' = !hasClaudeSessions ? 'tokens'
+    : view === 'cost' && !costAvailable ? 'tokens'
     : view === 'tokens' && !tokensAvailable ? 'cost'
     : view;
 
@@ -493,9 +509,9 @@ function ProjectStatsPanel({ sessions, view, onChangeView, costAllowed, tt }: { 
         <div className="project-stats-chart">
           <div className="project-stats-section-row">
             <div className="project-stats-section-label">
-              {effectiveView === 'cost' ? 'Daily cost · last 30 days' : 'Daily tokens · last 30 days'}
+              {effectiveView === 'cost' ? `Daily cost${hasCodexSessions ? " (Claude Code)" : ""} · last 30 days` : 'Daily tokens · last 30 days'}
             </div>
-            <div className="metric-toggle" role="tablist" aria-label="Stats metric">
+            {hasClaudeSessions && <div className="metric-toggle" role="tablist" aria-label="Stats metric">
               {/* Wrap the disabled Cost button in a span — disabled buttons swallow mouse
                   events on most browsers, so the tooltip would never fire from the button
                   itself. The span captures hover and forwards the disabled-reason text. */}
@@ -519,7 +535,7 @@ function ProjectStatsPanel({ sessions, view, onChangeView, costAllowed, tt }: { 
                 disabled={!tokensAvailable}
                 onClick={() => onChangeView('tokens')}
               >Tokens</button>
-            </div>
+            </div>}
           </div>
           {effectiveView === 'cost' ? (
             <MetricAreaChart series={dailyCostSeries(sessions, 30)} bandClasses={["trend-band-cost"]} format={formatCost} />
@@ -577,10 +593,13 @@ function ProjectIcon({ project, projectIcons, size }: { project: ProjectInfo; pr
   const iconValue = settings?.icon;
   const displayName = settings?.customName || project.name;
   const imgSrc = useProjectImage(iconValue);
-  if (imgSrc) return <img src={imgSrc} style={{ width: size, height: size, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} alt="" />;
+  // Radius scales with size so the icon reads as a rounded square at 40px (project header)
+  // and at 18px (recent-project pills) alike.
+  const radius = Math.round(size * 0.28);
+  if (imgSrc) return <img src={imgSrc} style={{ width: size, height: size, borderRadius: radius, objectFit: "cover", flexShrink: 0 }} alt="" />;
   const bg = settings?.color || "var(--accent-terracotta)";
   return (
-    <div style={{ width: size, height: size, borderRadius: 10, background: bg, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-primary)", fontSize: iconValue ? size * 0.5 : size * 0.35, fontWeight: 600, flexShrink: 0 }}>
+    <div style={{ width: size, height: size, borderRadius: radius, background: bg, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-primary)", fontSize: iconValue ? size * 0.5 : Math.max(7, size * 0.35), fontWeight: 600, flexShrink: 0 }}>
       {iconValue || displayName.slice(0, 2).toUpperCase()}
     </div>
   );
@@ -592,7 +611,7 @@ function filterSessions(sessions: SessionInfo[], query: string): SessionInfo[] {
   return sessions.filter(s => s.title.toLowerCase().includes(q) || s.project_name.toLowerCase().includes(q) || s.git_branch.toLowerCase().includes(q));
 }
 
-export function HomeView({ projects, selectedProject, projectIcons, recentSessions, projectSessions, openSessionIds, sessionGroupName, loading, sessionsLoading, contextTreeEnabled, showSessionRowMetrics, showProjectStatsChart, projectStatsView, onChangeProjectStatsView, onOpenSession, onOpenSessionBackground, onSelectProject, onNewChat, onAddProject, onRemoveProject, onEditProject, onSaveFolders }: HomeViewProps) {
+export function HomeView({ projects, activeCountByProject, selectedProject, projectIcons, recentSessions, projectSessions, openSessionIds, sessionGroupName, loading, sessionsLoading, contextTreeEnabled, showSessionRowMetrics, showSessionRowMetricsCodex, showProjectStatsChart, projectStatsView, onChangeProjectStatsView, onOpenSession, onOpenSessionBackground, onSelectProject, onNewChat, onAddProject, onRemoveProject, onEditProject, onSaveFolders }: HomeViewProps) {
   const [search, setSearch] = useState("");
   // Scroll-driven collapse of the stats strip in the project detail view. Same UX the old
   // preview cards had: scroll down → strip slides up out of view; pull back up at the very
@@ -628,6 +647,14 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
   const showTt = useCallback((text: string, el: HTMLElement) => setTooltip({ text, rect: el.getBoundingClientRect() }), []);
   const hideTt = useCallback(() => setTooltip(null), []);
   const tt: TtFns = useMemo(() => ({ showTt, hideTt }), [showTt, hideTt]);
+
+  // Pills are capped to keep the section one-glance small for users with many pinned
+  // projects; the overflow hides behind a "+N more" toggle.
+  const [showAllProjects, setShowAllProjects] = useState(false);
+
+  // Row metrics are toggled per agent: Claude's setting is hook-gated, Codex's reads
+  // rollout files directly — each session row follows its own agent's toggle.
+  const metricsForSession = (s: SessionInfo) => s.agent === "codex" ? showSessionRowMetricsCodex : showSessionRowMetrics;
 
   // Live-read folders for the selected project. A new array identity only when it actually changes.
   const folders: SessionFolder[] = useMemo(() => {
@@ -815,7 +842,7 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
             <div className="project-detail-sessions" key={selectedProject.path}>
           {sessionsLoading ? <SessionsLoader /> : isSearching ? (
             <div className="session-list">
-              {filteredAll.map(session => <SessionRow key={session.id} session={session} isOpen={openSessionIds.has(session.id)} groupName={sessionGroupName?.[session.id]} onClick={() => onOpenSession(session, selectedProject)} onAddAsTab={() => onOpenSessionBackground(session, selectedProject)} tt={tt} showMetrics={showSessionRowMetrics} />)}
+              {filteredAll.map(session => <SessionRow key={session.id} session={session} isOpen={openSessionIds.has(session.id)} groupName={sessionGroupName?.[session.id]} onClick={() => onOpenSession(session, selectedProject)} onAddAsTab={() => onOpenSessionBackground(session, selectedProject)} tt={tt} showMetrics={metricsForSession(session)} />)}
               {filteredAll.length === 0 && <div className="empty-state"><div className="empty-state-desc">No sessions matching "{search}"</div></div>}
             </div>
           ) : (
@@ -850,7 +877,7 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
                             {folderSessions.length === 0 ? (
                               <div className="folder-empty">Drop sessions here</div>
                             ) : folderSessions.map(session => (
-                              <SessionRow key={session.id} session={session} isOpen={openSessionIds.has(session.id)} groupName={sessionGroupName?.[session.id]} onClick={() => onOpenSession(session, selectedProject)} isDragging={dragState?.active && dragState.sessionId === session.id} onPointerDownDrag={(e) => startSessionDrag(e, session, folder.id)} onAddAsTab={() => onOpenSessionBackground(session, selectedProject)} tt={tt} showMetrics={showSessionRowMetrics} />
+                              <SessionRow key={session.id} session={session} isOpen={openSessionIds.has(session.id)} groupName={sessionGroupName?.[session.id]} onClick={() => onOpenSession(session, selectedProject)} isDragging={dragState?.active && dragState.sessionId === session.id} onPointerDownDrag={(e) => startSessionDrag(e, session, folder.id)} onAddAsTab={() => onOpenSessionBackground(session, selectedProject)} tt={tt} showMetrics={metricsForSession(session)} />
                             ))}
                           </div>
                         </div>
@@ -871,7 +898,7 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
                 ) : (
                   <div className="session-list">
                     {ungrouped.map(session => (
-                      <SessionRow key={session.id} session={session} isOpen={openSessionIds.has(session.id)} groupName={sessionGroupName?.[session.id]} onClick={() => onOpenSession(session, selectedProject)} isDragging={dragState?.active && dragState.sessionId === session.id} onPointerDownDrag={(e) => startSessionDrag(e, session, null)} onAddAsTab={() => onOpenSessionBackground(session, selectedProject)} tt={tt} showMetrics={showSessionRowMetrics} />
+                      <SessionRow key={session.id} session={session} isOpen={openSessionIds.has(session.id)} groupName={sessionGroupName?.[session.id]} onClick={() => onOpenSession(session, selectedProject)} isDragging={dragState?.active && dragState.sessionId === session.id} onPointerDownDrag={(e) => startSessionDrag(e, session, null)} onAddAsTab={() => onOpenSessionBackground(session, selectedProject)} tt={tt} showMetrics={metricsForSession(session)} />
                     ))}
                   </div>
                 )}
@@ -906,7 +933,7 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
           );
         })()}
         </div>
-        {contextTreeEnabled && <SkillsPanel projectPath={selectedProject.path} projectName={projectIcons[selectedProject.path.toLowerCase()]?.customName || selectedProject.name} />}
+        {contextTreeEnabled && <SkillsPanel projectPath={selectedProject.path} projectName={projectIcons[selectedProject.path.toLowerCase()]?.customName || selectedProject.name} agentPresence={{ claude: projectSessions.some(s => s.agent === "claude"), codex: projectSessions.some(s => s.agent === "codex") }} />}
       </div>
     );
   }
@@ -934,16 +961,35 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
                 <button className="btn" onClick={onAddProject}><FolderPlus size={11} /> Add Project</button>
               </div>
             </div>
-            <div className="project-cards">
-              {projects.map(project => (
-                <div key={project.path} className="project-card" onClick={() => onSelectProject(project)}>
-                  <div className="project-card-header">
-                    <div className="project-card-dot" />
-                    <span className="project-card-name">{projectIcons[project.path.toLowerCase()]?.customName || project.name}</span>
-                  </div>
-                  <div className="project-card-path" title={project.path}>{project.path}</div>
-                </div>
-              ))}
+            <div className="project-pills">
+              {(() => {
+                // Most recently active first; pinned folders without sessions (empty
+                // last_active) sink to the end. Cap to two-ish rows unless expanded.
+                const sorted = [...projects].sort((a, b) => (b.last_active || "").localeCompare(a.last_active || ""));
+                const PILL_LIMIT = 12;
+                const visible = showAllProjects ? sorted : sorted.slice(0, PILL_LIMIT);
+                const hidden = sorted.length - PILL_LIMIT;
+                return (
+                  <>
+                    {visible.map(project => {
+                      // Same source as the sidebar's green badge: open terminal tabs per project.
+                      const activeCount = activeCountByProject.get(project.path.toLowerCase()) || 0;
+                      return (
+                        <div key={project.path} className={`project-pill ${activeCount > 0 ? "is-active" : ""}`} onClick={() => onSelectProject(project)} {...ttProps(tt, activeCount > 0 ? `${project.path} · ${activeCount} active session${activeCount === 1 ? "" : "s"}` : project.path)}>
+                          <ProjectIcon project={project} projectIcons={projectIcons} size={20} />
+                          <span className="project-pill-name">{projectIcons[project.path.toLowerCase()]?.customName || project.name}</span>
+                          {activeCount > 0 && <span className="project-pill-badge">{activeCount}</span>}
+                        </div>
+                      );
+                    })}
+                    {hidden > 0 && (
+                      <button className="project-pill project-pill-more" onClick={() => setShowAllProjects(v => !v)}>
+                        {showAllProjects ? "Show less" : `+${hidden} more`}
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </div>
         )}
@@ -965,7 +1011,7 @@ export function HomeView({ projects, selectedProject, projectIcons, recentSessio
         {sessionsLoading ? <SessionsLoader /> : (
           filtered.length > 0 ? (
             <div className="session-list">
-              {filtered.map(session => <SessionRow key={session.id} session={session} isOpen={openSessionIds.has(session.id)} groupName={sessionGroupName?.[session.id]} onClick={() => onOpenSession(session)} onAddAsTab={() => onOpenSessionBackground(session)} tt={tt} showMetrics={showSessionRowMetrics} />)}
+              {filtered.map(session => <SessionRow key={session.id} session={session} isOpen={openSessionIds.has(session.id)} groupName={sessionGroupName?.[session.id]} onClick={() => onOpenSession(session)} onAddAsTab={() => onOpenSessionBackground(session)} tt={tt} showMetrics={metricsForSession(session)} />)}
             </div>
           ) : search ? (
             <div className="empty-state"><div className="empty-state-desc">No sessions matching "{search}"</div></div>
