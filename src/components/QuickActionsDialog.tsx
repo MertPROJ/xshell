@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, Terminal as TerminalIcon, Settings, X, PanelLeft, ChevronRight, ChevronLeft } from "lucide-react";
+import { Search, Terminal as TerminalIcon, Settings, X, PanelLeft, ChevronRight, ChevronLeft, Bot } from "lucide-react";
 import { useProjectImage } from "../hooks/useProjectImage";
 import { ShellIcon } from "./ShellIcon";
-import { ClaudeChatIcon } from "./ClaudeChatIcon";
+import { AGENT_IDS, AgentIcon, type AgentId } from "../agents";
 import { getAvailableShells } from "../shells";
 import logo from "../assets/logo.png";
 import type { ProjectInfo, ProjectSettings, Tab } from "../types";
@@ -25,6 +25,7 @@ interface QuickActionsDialogProps {
   linkedProjectPath: string | null;
   selectedProjectPath: string | null;
   hasActiveTab: boolean;
+  installedAgents: Record<AgentId, boolean>;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onNewChat: (project: ProjectInfo) => void;
@@ -53,7 +54,7 @@ function ProjectMiniIcon({ iconValue, color, name }: { iconValue?: string; color
   return <div className="ts-project-icon" style={{ background: color || undefined }}>{iconValue || getInitials(name || "?")}</div>;
 }
 
-export function QuickActionsDialog({ tabs, activeTabId, projectIcons, pinnedProjects, contextProject, hoveredProjectPath, linkedProjectPath, selectedProjectPath, hasActiveTab, onSelectTab, onCloseTab, onNewChat, onNewShell, onGoHome, onOpenSettings, onToggleSidebar, onClose }: QuickActionsDialogProps) {
+export function QuickActionsDialog({ tabs, activeTabId, projectIcons, pinnedProjects, contextProject, hoveredProjectPath, linkedProjectPath, selectedProjectPath, hasActiveTab, installedAgents, onSelectTab, onCloseTab, onNewChat, onNewShell, onGoHome, onOpenSettings, onToggleSidebar, onClose }: QuickActionsDialogProps) {
   const ref = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -104,16 +105,26 @@ export function QuickActionsDialog({ tabs, activeTabId, projectIcons, pinnedProj
   // Project-context label used in the "New shell in <here>" hint.
   const contextLabel = contextProject ? (projectIcons[contextProject.path.toLowerCase()]?.customName || contextProject.name) : "~";
 
+  // Icon for the new-chat affordances: the single installed agent's mark, or a neutral
+  // agent glyph when several are installed — which agent hosts the chat is resolved after
+  // the project pick (default agent or the chooser dialog), so no specific mark is honest.
+  const installed = AGENT_IDS.filter(id => installedAgents[id]);
+  const newChatAgent: AgentId | null = installed.length === 1 ? installed[0] : null;
+  const NewChatIcon = ({ size, className }: { size?: number; className?: string }) =>
+    newChatAgent ? <AgentIcon agent={newChatAgent} size={size} className={className} /> : <Bot size={size} className={className} />;
+
   // Action list — filtered by query. `disabled` actions still render but can't be activated.
   type Action = { id: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; hint?: string; drill?: View; run?: () => void; disabled?: boolean };
   const actions: Action[] = useMemo(() => [
-    { id: "new-chat", label: "New chat in...", icon: ClaudeChatIcon, hint: "pick a project", drill: "new-chat-project" },
+    { id: "new-chat", label: "New chat in...", icon: NewChatIcon, hint: "pick a project", drill: "new-chat-project" },
     { id: "new-shell", label: "New shell in...", icon: TerminalIcon, hint: `pick a shell · opens in ${contextLabel}`, drill: "new-shell" },
     { id: "close-tab", label: "Close active tab", icon: X, run: () => { if (hasActiveTab) onCloseTab(activeTabId); }, disabled: !hasActiveTab },
     { id: "go-home", label: "Go home", icon: XShellHomeIcon, run: onGoHome },
     { id: "toggle-sidebar", label: "Toggle sidebar", icon: PanelLeft, run: onToggleSidebar },
     { id: "open-settings", label: "Open settings", icon: Settings, run: onOpenSettings },
-  ], [hasActiveTab, activeTabId, contextLabel, onCloseTab, onGoHome, onToggleSidebar, onOpenSettings]);
+  // newChatAgent dep: NewChatIcon is recreated per render but only its agent matters —
+  // re-memo when the detection probe changes which agents are installed.
+  ], [hasActiveTab, activeTabId, contextLabel, newChatAgent, onCloseTab, onGoHome, onToggleSidebar, onOpenSettings]);
 
   // Available shells for the drill-down view.
   const shells = useMemo(() => getAvailableShells(), []);
@@ -326,7 +337,7 @@ export function QuickActionsDialog({ tabs, activeTabId, projectIcons, pinnedProj
                   <div className="ts-row-title">{display}</div>
                   <div className="ts-row-sub">{proj.path}</div>
                 </div>
-                <ClaudeChatIcon size={13} className="ts-row-tag-icon" />
+                <NewChatIcon size={13} className="ts-row-tag-icon" />
               </div>
             );
           })}

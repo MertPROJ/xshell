@@ -441,6 +441,7 @@ export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProj
           linkedProjectPath={linkedProjectPath}
           selectedProjectPath={selectedProject?.path || null}
           hasActiveTab={!!tabs.find(t => t.id === activeTabId)}
+          installedAgents={installedAgents}
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
           onNewChat={onNewChat}
