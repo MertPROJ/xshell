@@ -2,8 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, FolderPlus, Search } from "lucide-react";
 import type { CodexProjectInfo, ProjectInfo } from "../types";
-import { ClaudeChatIcon } from "./ClaudeChatIcon";
-import { OpenAIIcon } from "./OpenAIIcon";
+import { AGENT_IDS, AGENTS, AgentIcon, type AgentId } from "../agents";
 import { useTooltip, ttProps } from "./Tooltip";
 import { normalizePath } from "../utils";
 
@@ -16,29 +15,30 @@ interface ProjectPickerProps {
   onRefresh?: () => void;
 }
 
-// One row per directory where a coding agent has been used. Claude Code rows come from
-// ~/.claude/projects (via the allProjects prop, owned by App), Codex rows from
-// ~/.codex/sessions rollout metadata (fetched here — the picker is the only consumer).
-// A directory both agents know collapses into a single row carrying both marks.
+// One row per directory where a coding agent has been used. Claude rows come from
+// ~/.claude/projects (the allProjects prop, owned by App); Codex and Cursor are fetched
+// here (the picker is their only consumer). A directory several agents know collapses into
+// a single row carrying each agent's mark + session count.
 interface PickerRow {
   path: string;
   name: string;
-  claude?: ProjectInfo;
-  codex?: CodexProjectInfo;
+  counts: Partial<Record<AgentId, number>>; // sessions per agent in this directory
   lastActive: string;
 }
 
 export function ProjectPicker({ allProjects, savedPaths, onToggle, onBrowse, onClose, onRefresh }: ProjectPickerProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [codexProjects, setCodexProjects] = useState<CodexProjectInfo[]>([]);
+  const [cursorProjects, setCursorProjects] = useState<CodexProjectInfo[]>([]);
   const [filter, setFilter] = useState("");
   const { tt, Tooltip } = useTooltip();
 
-  // Refresh both agents' lists every time the dialog is opened so directories used since
-  // app start (or since the last open) appear without requiring a restart.
+  // Refresh every agent's list when the dialog opens so directories used since app start
+  // (or since the last open) appear without requiring a restart.
   useEffect(() => {
     onRefresh?.();
     invoke<CodexProjectInfo[]>("list_codex_projects").then(setCodexProjects).catch(() => {});
+    invoke<CodexProjectInfo[]>("list_cursor_projects").then(setCursorProjects).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -55,24 +55,26 @@ export function ProjectPicker({ allProjects, savedPaths, onToggle, onBrowse, onC
 
   const rows = useMemo(() => {
     const map = new Map<string, PickerRow>();
-    for (const p of allProjects) {
-      map.set(normalizePath(p.path), { path: p.path, name: p.name, claude: p, lastActive: p.last_active });
-    }
-    for (const c of codexProjects) {
-      const key = normalizePath(c.path);
+    // Fold one agent's directory list into the row map: create-or-merge by normalized path,
+    // record the agent's session count, and keep the freshest activity timestamp.
+    const fold = (agent: AgentId, path: string, sessionCount: number, lastActive: string) => {
+      const key = normalizePath(path);
       const existing = map.get(key);
       if (existing) {
-        existing.codex = c;
-        if (c.last_active > existing.lastActive) existing.lastActive = c.last_active;
+        existing.counts[agent] = sessionCount;
+        if (lastActive > existing.lastActive) existing.lastActive = lastActive;
       } else {
-        const name = c.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || c.path;
-        map.set(key, { path: c.path, name, codex: c, lastActive: c.last_active });
+        const name = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
+        map.set(key, { path, name, counts: { [agent]: sessionCount }, lastActive });
       }
-    }
+    };
+    for (const p of allProjects) fold("claude", p.path, p.session_count, p.last_active);
+    for (const c of codexProjects) fold("codex", c.path, c.session_count, c.last_active);
+    for (const c of cursorProjects) fold("cursor", c.path, c.session_count, c.last_active);
     const list = [...map.values()].sort((a, b) => b.lastActive.localeCompare(a.lastActive));
     const q = filter.trim().toLowerCase();
     return q ? list.filter(r => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q)) : list;
-  }, [allProjects, codexProjects, filter]);
+  }, [allProjects, codexProjects, cursorProjects, filter]);
 
   const isChecked = (path: string) => savedPaths.some(p => normalizePath(p) === normalizePath(path));
 
@@ -109,13 +111,10 @@ export function ProjectPicker({ allProjects, savedPaths, onToggle, onBrowse, onC
                   <div className="picker-item-path" {...ttProps(tt, row.path)}>{row.path}</div>
                 </div>
                 <div className="picker-item-agents">
-                  {row.claude && (
-                    <span className="picker-agent" {...ttProps(tt, `${row.claude.session_count} Claude Code session${row.claude.session_count === 1 ? "" : "s"}`)}><ClaudeChatIcon size={13} /></span>
-                  )}
-                  {row.codex && (
-                    <span className="picker-agent" {...ttProps(tt, `${row.codex.session_count} Codex session${row.codex.session_count === 1 ? "" : "s"}`)}><OpenAIIcon size={12} /></span>
-                  )}
-                  <span className="picker-item-count" {...ttProps(tt, "Total sessions in this directory")}>{(row.claude?.session_count ?? 0) + (row.codex?.session_count ?? 0)}</span>
+                  {AGENT_IDS.filter(id => row.counts[id]).map(id => (
+                    <span key={id} className="picker-agent" {...ttProps(tt, `${row.counts[id]} ${AGENTS[id].label} session${row.counts[id] === 1 ? "" : "s"}`)}><AgentIcon agent={id} size={12} /></span>
+                  ))}
+                  <span className="picker-item-count" {...ttProps(tt, "Total sessions in this directory")}>{AGENT_IDS.reduce((sum, id) => sum + (row.counts[id] ?? 0), 0)}</span>
                 </div>
               </div>
             ))}

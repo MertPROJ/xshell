@@ -85,17 +85,21 @@ function formatModel(raw: string): string {
   if (m.includes("opus")) { const v = pickVersion("opus"); return v ? `Opus ${v}` : "Opus"; }
   if (m.includes("sonnet")) { const v = pickVersion("sonnet"); return v ? `Sonnet ${v}` : "Sonnet"; }
   if (m.includes("haiku")) { const v = pickVersion("haiku"); return v ? `Haiku ${v}` : "Haiku"; }
+  // Cursor's own model family ("composer-2.5" → "Composer 2.5"). Cursor can also run
+  // third-party models (gpt-*, claude-*), which the branches above/below already format.
+  if (m.startsWith("composer")) { const v = m.match(/composer-([\d.]+)/); return v ? `Composer ${v[1]}` : "Composer"; }
   // Codex model ids are already short ("gpt-5.5") — just capitalize the family prefix.
   if (m.startsWith("gpt")) return raw.replace(/^gpt/i, "GPT");
   return raw;
 }
 
 // Tier class used for color-coding the model badge — "opus" stands out, "haiku" recedes.
-function modelTier(raw: string): "opus" | "sonnet" | "haiku" | "gpt" | "unknown" {
+function modelTier(raw: string): "opus" | "sonnet" | "haiku" | "gpt" | "cursor" | "unknown" {
   const m = raw.toLowerCase();
   if (m.includes("opus")) return "opus";
   if (m.includes("haiku")) return "haiku";
   if (m.includes("sonnet")) return "sonnet";
+  if (m.startsWith("composer")) return "cursor";
   if (m.startsWith("gpt") || m.includes("codex")) return "gpt";
   return "unknown";
 }
@@ -477,12 +481,12 @@ function ProjectStatsPanel({ sessions, view, onChangeView, costAllowed, tt }: { 
 
   const totalMessages = sessions.reduce((sum, s) => sum + (s.message_count || 0), 0);
 
-  // Cost is a Claude-only concept (Codex plans have no per-use cost), so a project with no
-  // Claude sessions drops the Cost/Tokens toggle entirely and always shows tokens — a
-  // Codex-only user never reads Claude setup copy. Mixed projects keep the toggle and the
+  // Cost is a Claude-only concept (Codex/Cursor have no per-use cost locally), so a project
+  // with no Claude sessions drops the Cost/Tokens toggle entirely and always shows tokens —
+  // a non-Claude user never reads Claude setup copy. Mixed projects keep the toggle and the
   // cost view names its agent so the dollar figure isn't mistaken for a project total.
   const hasClaudeSessions = sessions.some(s => s.agent === "claude");
-  const hasCodexSessions = sessions.some(s => s.agent === "codex");
+  const hasOtherAgentSessions = sessions.some(s => s.agent !== "claude");
 
   // Reason the Cost button is disabled — surfaced as a tooltip so the user knows what to
   // change to unlock it. We can tell the three causes apart from session data + the costAllowed
@@ -509,7 +513,7 @@ function ProjectStatsPanel({ sessions, view, onChangeView, costAllowed, tt }: { 
         <div className="project-stats-chart">
           <div className="project-stats-section-row">
             <div className="project-stats-section-label">
-              {effectiveView === 'cost' ? `Daily cost${hasCodexSessions ? " (Claude Code)" : ""} · last 30 days` : 'Daily tokens · last 30 days'}
+              {effectiveView === 'cost' ? `Daily cost${hasOtherAgentSessions ? " (Claude Code)" : ""} · last 30 days` : 'Daily tokens · last 30 days'}
             </div>
             {hasClaudeSessions && <div className="metric-toggle" role="tablist" aria-label="Stats metric">
               {/* Wrap the disabled Cost button in a span — disabled buttons swallow mouse
@@ -933,7 +937,7 @@ export function HomeView({ projects, activeCountByProject, selectedProject, proj
           );
         })()}
         </div>
-        {contextTreeEnabled && <SkillsPanel projectPath={selectedProject.path} projectName={projectIcons[selectedProject.path.toLowerCase()]?.customName || selectedProject.name} agentPresence={{ claude: projectSessions.some(s => s.agent === "claude"), codex: projectSessions.some(s => s.agent === "codex") }} />}
+        {contextTreeEnabled && <SkillsPanel projectPath={selectedProject.path} projectName={projectIcons[selectedProject.path.toLowerCase()]?.customName || selectedProject.name} agentPresence={{ claude: projectSessions.some(s => s.agent === "claude"), codex: projectSessions.some(s => s.agent === "codex"), cursor: projectSessions.some(s => s.agent === "cursor") }} />}
       </div>
     );
   }

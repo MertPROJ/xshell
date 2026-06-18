@@ -244,7 +244,7 @@ export default function App() {
         if (typeof projectStatsChart === "boolean") setShowProjectStatsChart(projectStatsChart);
         if (storedTheme === "light" || storedTheme === "dark") setTheme(storedTheme);
         if (statsView === "cost" || statsView === "tokens") setProjectStatsView(statsView);
-        if (defAgent === "ask" || defAgent === "claude" || defAgent === "codex") setDefaultAgent(defAgent);
+        if (defAgent === "ask" || (typeof defAgent === "string" && (AGENT_IDS as string[]).includes(defAgent))) setDefaultAgent(defAgent as "ask" | AgentId);
         if (typeof rowMetricsCodex === "boolean") setShowSessionRowMetricsCodex(rowMetricsCodex);
         if (typeof rlSidebarCodex === "boolean") setShowRateLimitInSidebarCodex(rlSidebarCodex);
         // Restore only tabs that have a real sessionId (not abandoned "New Chat" tabs)

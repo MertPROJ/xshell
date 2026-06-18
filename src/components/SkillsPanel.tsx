@@ -1,7 +1,7 @@
 import { useEffect, useState, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Network, User, FolderTree, Puzzle, ChevronRight, Plug, Globe, Terminal as TerminalIcon, Wand2, FolderOpen, Sparkles, Brain, Bot, Slash, Zap, FileText, Layers } from "lucide-react";
-import type { ProjectSkills, Skill, Plugin, McpInfo, ProjectMemories, Memory, SubagentInfo, SlashCommand, HookEntry, ClaudeMdFile, SettingsSource, CodexContext, AgentContextSection } from "../types";
+import type { ProjectSkills, Skill, Plugin, McpInfo, ProjectMemories, Memory, SubagentInfo, SlashCommand, HookEntry, ClaudeMdFile, SettingsSource, CodexContext, CursorContext, AgentContextSection } from "../types";
 import { useTooltip, useTt, ttProps, TooltipProvider } from "./Tooltip";
 import { MarkdownDialog } from "./MarkdownDialog";
 import { AGENTS, AgentIcon } from "../agents";
@@ -10,8 +10,8 @@ interface Props {
   projectPath: string;
   projectName: string;
   // Which agents have sessions in this project — part of the root-section gating (a pure
-  // Codex project hides the Claude roots and vice versa; see visibility rules in the panel).
-  agentPresence?: { claude: boolean; codex: boolean };
+  // Codex/Cursor project hides the Claude roots and vice versa; see visibility rules below).
+  agentPresence?: { claude: boolean; codex: boolean; cursor: boolean };
 }
 
 function revealFolder(path: string) { invoke("reveal_in_explorer", { path }).catch(() => {}); }
@@ -427,6 +427,7 @@ function AgentContextRoot({ title, icon, trustLevel, sections, onOpenDoc }: { ti
 export function SkillsPanel({ projectPath, projectName, agentPresence }: Props) {
   const [data, setData] = useState<ProjectSkills | null>(null);
   const [codexCtx, setCodexCtx] = useState<CodexContext | null>(null);
+  const [cursorCtx, setCursorCtx] = useState<CursorContext | null>(null);
   const [memories, setMemories] = useState<ProjectMemories>({ dir: "", items: [] });
   const [loading, setLoading] = useState(false);
   const [username, setUsername] = useState("user");
@@ -463,6 +464,12 @@ export function SkillsPanel({ projectPath, projectName, agentPresence }: Props) 
       console.error("[SkillsPanel] codex context error:", e);
       setCodexCtx(null);
     }
+    try {
+      setCursorCtx(await invoke<CursorContext>("get_cursor_context", { projectPath }));
+    } catch (e) {
+      console.error("[SkillsPanel] cursor context error:", e);
+      setCursorCtx(null);
+    }
   };
   useEffect(() => { fetchData(); /* eslint-disable-next-line */ }, [projectPath]);
 
@@ -488,16 +495,17 @@ export function SkillsPanel({ projectPath, projectName, agentPresence }: Props) 
 
   // ─── Agent-conditional visibility ──────────────────────────────────
   // Claude roots show when there's any Claude content or the project has Claude sessions —
-  // a pure Codex user (no ~/.claude content at all) never reads Claude vocabulary. The
-  // Codex root shows when Codex artifacts or sessions exist for this project. If neither
-  // side has anything, fall back to the Claude roots (the pre-Codex default empty state).
+  // a pure Codex/Cursor user (no ~/.claude content) never reads Claude vocabulary. Each
+  // other agent's root shows when its artifacts or sessions exist for this project. If no
+  // agent has anything, fall back to the Claude roots (the pre-multi-agent empty state).
   const claudeContentCount = data ? data.personal_skills.length + data.project_skills.length + data.plugins.length + data.user_mcps.length + data.project_mcps.length + data.subagents.length + data.slash_commands.length + data.hooks.length + data.claude_md_files.length + data.settings_sources.filter(s => s.exists).length : 0;
   const codexVisible = !!(codexCtx?.present || agentPresence?.codex);
+  const cursorVisible = !!(cursorCtx?.present || agentPresence?.cursor);
   let claudeVisible = claudeContentCount + memories.items.length > 0 || !!agentPresence?.claude;
-  if (!claudeVisible && !codexVisible) claudeVisible = true;
-  // When both agents share the tree, the Claude roots name their agent in the hint so the
-  // grouping is unambiguous; single-agent trees stay free of agent labels.
-  const claudeHintSuffix = claudeVisible && codexVisible ? ` · ${AGENTS.claude.label}` : "";
+  if (!claudeVisible && !codexVisible && !cursorVisible) claudeVisible = true;
+  // When Claude shares the tree with another agent, its roots name their agent in the hint
+  // so the grouping is unambiguous; single-agent trees stay free of agent labels.
+  const claudeHintSuffix = claudeVisible && (codexVisible || cursorVisible) ? ` · ${AGENTS.claude.label}` : "";
 
   return (
     <TooltipProvider tt={tt}>
@@ -557,6 +565,15 @@ export function SkillsPanel({ projectPath, projectName, agentPresence }: Props) 
                 icon={<AgentIcon agent="codex" size={12} className="tn-agent-icon-neutral" />}
                 trustLevel={codexCtx.trust_level}
                 sections={codexCtx.sections}
+                onOpenDoc={(path, title) => setOpenDoc({ path, title })}
+              />
+            )}
+            {cursorVisible && cursorCtx && (
+              <AgentContextRoot
+                title={AGENTS.cursor.label}
+                icon={<AgentIcon agent="cursor" size={12} />}
+                trustLevel={null}
+                sections={cursorCtx.sections}
                 onOpenDoc={(path, title) => setOpenDoc({ path, title })}
               />
             )}
