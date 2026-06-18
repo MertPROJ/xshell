@@ -596,6 +596,10 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .rl-panel { position: fixed; z-index: 3200; width: 320px; background: var(--bg-deep); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5); padding: 14px 16px; pointer-events: none; animation: rlPanelIn 0.12s ease; }
 @keyframes rlPanelIn { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: translateX(0); } }
 .rl-panel-section { display: flex; flex-direction: column; gap: 8px; }
+/* Per-agent header inside the popover — agent mark + name above that agent's meters. */
+.rl-panel-head { display: flex; align-items: center; gap: 6px; }
+.rl-panel-agent-icon { color: var(--accent-terracotta); flex-shrink: 0; }
+.rl-panel-agent-icon-neutral { color: var(--text-secondary); flex-shrink: 0; }
 .rl-panel-title { font-size: 11px; font-weight: 700; color: var(--text-primary); }
 .rl-panel-divider { height: 1px; background: var(--border-subtle); margin: 12px 0; }
 .rl-panel-foot { font-size: 9.5px; color: var(--text-muted); margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-subtle); letter-spacing: 0.2px; }

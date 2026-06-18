@@ -25,6 +25,7 @@ interface SidebarProps {
   activeTabId: string;
   linkedProjectPath: string | null;
   showRateLimit: boolean;
+  showRateLimitCodex: boolean;
   updateAvailable: boolean;
 }
 
@@ -143,7 +144,7 @@ function targetsEqual(a: DropTarget, b: DropTarget): boolean {
   return false;
 }
 
-export function Sidebar({ projects, projectIcons, selectedProject, activeCountByProject, sidebarLayout, onLayoutChange, onSelectProject, onGoHome, onRemoveProject, onEditProject, onHoverProject, onOpenSettings, onAddProject, onCollapse, activeTabId, linkedProjectPath, showRateLimit, updateAvailable }: SidebarProps) {
+export function Sidebar({ projects, projectIcons, selectedProject, activeCountByProject, sidebarLayout, onLayoutChange, onSelectProject, onGoHome, onRemoveProject, onEditProject, onHoverProject, onOpenSettings, onAddProject, onCollapse, activeTabId, linkedProjectPath, showRateLimit, showRateLimitCodex, updateAvailable }: SidebarProps) {
   const [ctx, setCtx] = useState<CtxState>(null);
   const [tooltip, setTooltip] = useState<{ text: string; rect: DOMRect } | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -529,9 +530,10 @@ export function Sidebar({ projects, projectIcons, selectedProject, activeCountBy
 
         {/* Account-wide rate-limit chip (5h / 7d window). Sourced from the freshest
             xshell-stats file across all sessions — same number Claude Code shows on its
-            statusline. Hidden until the statusline hook is configured AND the user has
-            this on in Settings. Settings itself now lives in the top bar. */}
-        {showRateLimit && <><div className="ds-separator" /><RateLimitIndicator /></>}
+            statusline; Codex's come from its rollout files. The indicator renders nothing
+            when neither agent is enabled or has data, so gate the separator on the same
+            "either could show" condition. Settings itself now lives in the top bar. */}
+        {(showRateLimit || showRateLimitCodex) && <><div className="ds-separator" /><RateLimitIndicator showClaude={showRateLimit} showCodex={showRateLimitCodex} /></>}
       </div>
 
       {/* Floating ghost that follows the cursor during drag — positioned via direct DOM

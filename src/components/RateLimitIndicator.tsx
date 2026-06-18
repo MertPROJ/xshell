@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Activity } from "lucide-react";
+import { AGENTS, AgentIcon, type AgentId } from "../agents";
+import type { CodexUsage } from "../types";
 
-// Global account-wide rate-limit snapshot, sourced from the freshest xshell-stats file
+// Claude's account-wide rate-limit snapshot, sourced from the freshest xshell-stats file
 // across all sessions. Claude Code reports the same 5h/7d numbers on every session's
 // statusline at any given moment — they're per-account, not per-session.
 interface GlobalRateLimits {
@@ -12,6 +14,21 @@ interface GlobalRateLimits {
   seven_day_resets_at: number | null;
   last_update_iso: string | null;
   source_session_id: string | null;
+}
+
+// Agent-agnostic shape the chip + popover render from. Each enabled agent with data
+// contributes one source; a third agent only needs to produce one of these.
+interface RateSource {
+  agent: AgentId;
+  fivePct: number | null;
+  fiveResetsAt: number | null;
+  sevenPct: number | null;
+  sevenResetsAt: number | null;
+  updatedIso: string | null;
+  // Codex only refreshes its limits while running, so its numbers are as old as the last
+  // session — flagged so the footer says "as of" rather than "updated".
+  stale: boolean;
+  note: string | null; // extra footer context (e.g. plan type)
 }
 
 function formatResetIn(unixSec: number | null): string {
@@ -44,8 +61,8 @@ function levelFor(pct: number | null): "ok" | "warn" | "hot" {
   return "ok";
 }
 
-// Single-row progress meter inside the popover. Mirrors the Claude usage page layout:
-// title on top-left, "X% used" on top-right, 4-px bar below, "Resets in ..." subtitle.
+// Single-row progress meter inside the popover: title top-left, "X% used" top-right, a
+// 4-px bar, then a "Resets in …" subtitle.
 function MeterRow({ label, pct, resetsAt }: { label: string; pct: number | null; resetsAt: number | null }) {
   const value = pct ?? 0;
   const lvl = levelFor(pct);
@@ -63,15 +80,12 @@ function MeterRow({ label, pct, resetsAt }: { label: string; pct: number | null;
   );
 }
 
-interface PanelProps { data: GlobalRateLimits; rect: DOMRect }
+interface PanelProps { sources: RateSource[]; rect: DOMRect }
 
 // Hover popover positioned to the right of the chip. Fixed-positioned so it isn't clipped
-// by the sidebar; we measure the chip rect and offset 12px to its right, vertically clamped
-// inside the viewport so it never spills off-screen. The first paint must already have the
-// final position — otherwise the user sees a brief jump from "default top" to centered.
-// useLayoutEffect runs synchronously after DOM mutation but BEFORE the browser paints,
-// which is exactly what we need here.
-function Panel({ data, rect }: PanelProps) {
+// by the sidebar; measured + clamped before paint (useLayoutEffect) so there's no jump.
+// One section per agent — both limits live in this single dialog.
+function Panel({ sources, rect }: PanelProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<React.CSSProperties>({ top: -9999, left: -9999, visibility: "hidden" });
 
@@ -80,49 +94,78 @@ function Panel({ data, rect }: PanelProps) {
     const h = ref.current.offsetHeight;
     const top = Math.max(8, Math.min(rect.top + rect.height / 2 - h / 2, window.innerHeight - h - 8));
     setPos({ top, left: rect.right + 12 });
-  }, [rect]);
+  }, [rect, sources.length]);
 
   return (
     <div ref={ref} className="rl-panel" style={pos}>
-      <div className="rl-panel-section">
-        <div className="rl-panel-title">Your usage limits</div>
-        <MeterRow label="Current session" pct={data.five_hour_pct} resetsAt={data.five_hour_resets_at} />
-      </div>
-      <div className="rl-panel-divider" />
-      <div className="rl-panel-section">
-        <div className="rl-panel-title">Weekly limits</div>
-        <MeterRow label="All models" pct={data.seven_day_pct} resetsAt={data.seven_day_resets_at} />
-      </div>
-      <div className="rl-panel-foot">
-        Updated {ageLabel(data.last_update_iso)} · sourced from Claude Code statusline
-      </div>
+      {sources.map((src, i) => (
+        <div key={src.agent}>
+          {i > 0 && <div className="rl-panel-divider" />}
+          <div className="rl-panel-section">
+            <div className="rl-panel-head">
+              <AgentIcon agent={src.agent} size={12} className={AGENTS[src.agent].neutralIcon ? "rl-panel-agent-icon-neutral" : "rl-panel-agent-icon"} />
+              <span className="rl-panel-title">{AGENTS[src.agent].label}</span>
+            </div>
+            <MeterRow label="5-hour limit" pct={src.fivePct} resetsAt={src.fiveResetsAt} />
+            <MeterRow label="Weekly limit" pct={src.sevenPct} resetsAt={src.sevenResetsAt} />
+            <div className="rl-panel-foot">
+              {src.stale ? "Limits as of " : "Updated "}{ageLabel(src.updatedIso)}{src.note ? ` · ${src.note}` : ""}
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
 
-export function RateLimitIndicator() {
-  const [data, setData] = useState<GlobalRateLimits | null>(null);
+// Account-wide usage chip above the Settings cog. Hosts every enabled agent that has data:
+// Claude (needs the statusline hook) and Codex (read straight from its rollout files). The
+// collapsed chip shows the single worst percentage across all shown agents; the popover
+// breaks it down per agent.
+export function RateLimitIndicator({ showClaude, showCodex }: { showClaude: boolean; showCodex: boolean }) {
+  const [claude, setClaude] = useState<GlobalRateLimits | null>(null);
+  const [codex, setCodex] = useState<CodexUsage | null>(null);
   const [hoverRect, setHoverRect] = useState<DOMRect | null>(null);
   const hideTimer = useRef<number | null>(null);
 
+  // Claude's hook file is cheap to read → poll every 8s, refresh on focus. Codex requires
+  // scanning rollout files and only changes when Codex runs, so poll it less often.
   useEffect(() => {
     let cancelled = false;
-    const fetch = () => invoke<GlobalRateLimits>("get_global_rate_limits").then(d => { if (!cancelled) setData(d); }).catch(() => {});
+    if (!showClaude) { setClaude(null); return; }
+    const fetch = () => invoke<GlobalRateLimits>("get_global_rate_limits").then(d => { if (!cancelled) setClaude(d); }).catch(() => {});
     fetch();
-    // Re-poll every 8s — cheap (single file read) and keeps the chip fresh while Claude
-    // Code refreshes its statusline. Also re-fetches on window focus so users don't see
-    // a stale value when alt-tabbing back in.
     const id = setInterval(fetch, 8000);
     const onFocus = () => fetch();
     window.addEventListener("focus", onFocus);
     return () => { cancelled = true; clearInterval(id); window.removeEventListener("focus", onFocus); };
-  }, []);
+  }, [showClaude]);
 
-  // Hide entirely when no statusline data exists yet — the wizard handles the "set it up"
-  // CTA, so cluttering the sidebar with an empty placeholder helps no one.
-  if (!data || (data.five_hour_pct == null && data.seven_day_pct == null)) return null;
+  useEffect(() => {
+    let cancelled = false;
+    if (!showCodex) { setCodex(null); return; }
+    const fetch = () => invoke<CodexUsage>("get_codex_usage").then(d => { if (!cancelled) setCodex(d); }).catch(() => {});
+    fetch();
+    const id = setInterval(fetch, 30000);
+    const onFocus = () => fetch();
+    window.addEventListener("focus", onFocus);
+    return () => { cancelled = true; clearInterval(id); window.removeEventListener("focus", onFocus); };
+  }, [showCodex]);
 
-  const pct = Math.max(data.five_hour_pct ?? 0, data.seven_day_pct ?? 0);
+  // Assemble the visible sources. An agent contributes only when enabled AND it actually
+  // has a percentage to show — no empty placeholder rows.
+  const sources: RateSource[] = [];
+  if (showClaude && claude && (claude.five_hour_pct != null || claude.seven_day_pct != null)) {
+    sources.push({ agent: "claude", fivePct: claude.five_hour_pct, fiveResetsAt: claude.five_hour_resets_at, sevenPct: claude.seven_day_pct, sevenResetsAt: claude.seven_day_resets_at, updatedIso: claude.last_update_iso, stale: false, note: null });
+  }
+  if (showCodex && codex?.present && (codex.primary?.used_percent != null || codex.secondary?.used_percent != null)) {
+    sources.push({ agent: "codex", fivePct: codex.primary?.used_percent ?? null, fiveResetsAt: codex.primary?.resets_at ?? null, sevenPct: codex.secondary?.used_percent ?? null, sevenResetsAt: codex.secondary?.resets_at ?? null, updatedIso: codex.rate_limits_updated_iso, stale: true, note: null });
+  }
+
+  if (sources.length === 0) return null;
+
+  // Chip shows the worst window across every visible agent.
+  const pct = Math.max(0, ...sources.flatMap(s => [s.fivePct ?? 0, s.sevenPct ?? 0]));
   const level = levelFor(pct);
 
   const onEnter = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -130,7 +173,6 @@ export function RateLimitIndicator() {
     setHoverRect(e.currentTarget.getBoundingClientRect());
   };
   const onLeave = () => {
-    // Small delay so a momentary mouseout-during-pan doesn't flicker the panel away.
     hideTimer.current = window.setTimeout(() => setHoverRect(null), 100);
   };
 
@@ -144,7 +186,7 @@ export function RateLimitIndicator() {
         <Activity size={11} />
         <span className="ds-rate-pct">{Math.round(pct)}<span className="ds-rate-pct-sym">%</span></span>
       </div>
-      {hoverRect && <Panel data={data} rect={hoverRect} />}
+      {hoverRect && <Panel sources={sources} rect={hoverRect} />}
     </div>
   );
 }

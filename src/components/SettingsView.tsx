@@ -48,6 +48,8 @@ interface SettingsViewProps {
   onSetShowSessionRowMetrics: (enabled: boolean) => void;
   showSessionRowMetricsCodex: boolean;
   onSetShowSessionRowMetricsCodex: (enabled: boolean) => void;
+  showRateLimitInSidebarCodex: boolean;
+  onSetShowRateLimitInSidebarCodex: (enabled: boolean) => void;
   showTerminalHeaderStats: boolean;
   onSetShowTerminalHeaderStats: (enabled: boolean) => void;
   showProjectStatsChart: boolean;
@@ -161,7 +163,7 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgent, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, webglRendering, onSetWebglRendering, terminalFontWeight, onSetTerminalFontWeight, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showSessionRowMetricsCodex, onSetShowSessionRowMetricsCodex, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgent, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, webglRendering, onSetWebglRendering, terminalFontWeight, onSetTerminalFontWeight, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showSessionRowMetricsCodex, onSetShowSessionRowMetricsCodex, showRateLimitInSidebarCodex, onSetShowRateLimitInSidebarCodex, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
@@ -314,9 +316,12 @@ export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgen
               <AgentHeader icon={<AgentIcon agent="codex" size={18} />} name={AGENTS.codex.label} tagline={AGENTS.codex.tagline} state={agentProbes.codex} onRefresh={probeAgents} open={expandedAgents.codex} onToggle={() => toggleAgent("codex")} tt={tt} />
               {expandedAgents.codex && <div className="settings-agent-body">
               <div className="settings-agent-empty">Codex is integrated: its sessions appear in your project and home lists (click to resume), token usage feeds the project stats, and AGENTS.md, prompts, and MCP servers show in the context tree. No setup needed — everything is read straight from <code>~/.codex</code>.</div>
-              <Section title="Session metrics" description="Codex reports context usage in its session files directly — no hook or setup required, so this works out of the box.">
+              <Section title="Session metrics" description="Codex reports usage in its session files directly — no hook or setup required, so these work out of the box.">
                 <SettingRow title="Detailed info on session rows" description="Show the context bar on each Codex session row. Model and message count always show — those are reliable from the session file alone.">
                   <Toggle checked={showSessionRowMetricsCodex} onChange={onSetShowSessionRowMetricsCodex} />
+                </SettingRow>
+                <SettingRow title="Rate limit in sidebar" description="Show Codex's usage in the percentage chip above the Settings cog. Hover for the 5h / 7d breakdown and reset times. Codex only refreshes these while it's running, so the popover notes how recent they are.">
+                  <Toggle checked={showRateLimitInSidebarCodex} onChange={onSetShowRateLimitInSidebarCodex} />
                 </SettingRow>
               </Section>
               </div>}
