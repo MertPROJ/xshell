@@ -104,7 +104,7 @@ export interface SessionInfo {
   daily_tokens: Record<string, [number, number, number, number]>;
   // Which coding agent produced this session — drives the row icon, model formatting, and
   // the resume command the terminal tab spawns.
-  agent: "claude" | "codex";
+  agent: "claude" | "codex" | "cursor";
 }
 
 export interface MessagePreview {
@@ -266,7 +266,7 @@ export interface Tab {
   encodedName?: string;
   shellMode?: 'claude' | 'raw'; // default 'claude'. 'raw' = plain shell, no claude command
   shellId?: string; // e.g. 'powershell', 'cmd', 'bash', 'zsh' — when shellMode='raw'
-  agent?: 'claude' | 'codex'; // which agent CLI the tab hosts; default 'claude'
+  agent?: 'claude' | 'codex' | 'cursor'; // which agent CLI the tab hosts; default 'claude'
   groupId?: string; // when set, the tab is a member of a group (not standalone in the tab bar)
   lastActiveAt?: number; // ms epoch — bumped whenever the tab becomes the focused leaf; drives "recent" sort in the tab search dialog
 }

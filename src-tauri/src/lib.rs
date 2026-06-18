@@ -1686,26 +1686,33 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
     let pair = pty_system.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| format!("Failed to open PTY: {}", e))?;
 
     let mode = shell_mode.as_deref().unwrap_or("claude");
-    // Which agent CLI this tab hosts. Codex tabs only ever open from an existing rollout,
-    // so their resume form is fixed; everything else (shell wrapping, PTY plumbing) is
-    // agent-agnostic and shared.
-    let agent_bin = if agent.as_deref() == Some("codex") { "codex" } else { "claude" };
-    // Claude: new chats arrive with a pre-allocated UUID and no JSONL on disk → use
-    // `--session-id` so Claude creates the session under our UUID (and leaves customTitle
-    // empty so ai-title can fire). Existing sessions have a JSONL on disk → `--resume`.
-    // Codex: `codex resume <id>`.
+    // Which agent CLI this tab hosts. Each agent's resume form differs; everything else
+    // (shell wrapping, PTY plumbing) is agent-agnostic and shared.
+    let agent_bin = match agent.as_deref() {
+        Some("codex") => "codex",
+        Some("cursor") => "cursor-agent",
+        _ => "claude",
+    };
+    // Resume args per agent:
+    //  - Claude: new chats arrive with a pre-allocated UUID and no JSONL on disk → use
+    //    `--session-id` so Claude creates the session under our UUID (leaving customTitle
+    //    empty so ai-title can fire). Existing sessions have a JSONL → `--resume`.
+    //  - Codex:  `codex resume <id>`.
+    //  - Cursor: `cursor-agent --resume=<id>`.
+    // New Codex/Cursor chats carry no session_id (they start unlinked) → spawn bare.
     let agent_args: Vec<String> = {
         let mut v = Vec::new();
         if let Some(ref sid) = session_id {
-            if agent_bin == "codex" {
-                v.push("resume".into());
-                v.push(sid.clone());
-            } else {
-                let jsonl_exists = get_claude_projects_dir()
-                    .map(|d| d.join(encode_project_name(&cwd)).join(format!("{}.jsonl", sid)).exists())
-                    .unwrap_or(false);
-                v.push(if jsonl_exists { "--resume".into() } else { "--session-id".into() });
-                v.push(sid.clone());
+            match agent_bin {
+                "codex" => { v.push("resume".into()); v.push(sid.clone()); }
+                "cursor-agent" => { v.push(format!("--resume={}", sid)); }
+                _ => {
+                    let jsonl_exists = get_claude_projects_dir()
+                        .map(|d| d.join(encode_project_name(&cwd)).join(format!("{}.jsonl", sid)).exists())
+                        .unwrap_or(false);
+                    v.push(if jsonl_exists { "--resume".into() } else { "--session-id".into() });
+                    v.push(sid.clone());
+                }
             }
         }
         v
@@ -2334,7 +2341,7 @@ pub struct AgentBinaryProbe {
 #[tauri::command]
 async fn detect_agent_binary(binary: String) -> Result<AgentBinaryProbe, String> {
     // The name ends up in a process invocation — only accept known agent binaries.
-    if binary != "claude" && binary != "codex" {
+    if binary != "claude" && binary != "codex" && binary != "cursor-agent" {
         return Err(format!("Unknown agent binary: {}", binary));
     }
     use std::process::Command;

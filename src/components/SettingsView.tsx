@@ -173,10 +173,10 @@ export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgen
   // Per-agent binary detection for the Agents page. Probed when the page is opened (and on
   // demand via Re-check) rather than on every settings mount — the version probe actually
   // launches the CLI once, which costs ~a second for node-based shims.
-  const [agentProbes, setAgentProbes] = useState<Record<AgentId, AgentProbeState>>({ claude: { loading: true, probe: null }, codex: { loading: true, probe: null } });
+  const [agentProbes, setAgentProbes] = useState<Record<AgentId, AgentProbeState>>(() => Object.fromEntries(AGENT_IDS.map(id => [id, { loading: true, probe: null }])) as Record<AgentId, AgentProbeState>);
   // Both agents start collapsed — the header chips already answer the "is it installed?"
   // question on their own; expanding is for digging into an agent's settings.
-  const [expandedAgents, setExpandedAgents] = useState<Record<AgentId, boolean>>({ claude: false, codex: false });
+  const [expandedAgents, setExpandedAgents] = useState<Record<AgentId, boolean>>(() => Object.fromEntries(AGENT_IDS.map(id => [id, false])) as Record<AgentId, boolean>);
   const toggleAgent = (id: AgentId) => setExpandedAgents(prev => ({ ...prev, [id]: !prev[id] }));
   const installer = useInstaller(updateInfo.update);
   const shells = getAvailableShells();
@@ -247,10 +247,9 @@ export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgen
               {(() => {
                 // Default-agent choice only means something with 2+ agents installed; with
                 // one, the select is pinned to it and disabled. Probe state drives this.
-                const claudeInstalled = !!agentProbes.claude.probe?.installed;
-                const codexInstalled = !!agentProbes.codex.probe?.installed;
-                const multi = claudeInstalled && codexInstalled;
-                const single = claudeInstalled ? "claude" : codexInstalled ? "codex" : "claude";
+                const installedIds = AGENT_IDS.filter(id => agentProbes[id].probe?.installed);
+                const multi = installedIds.length > 1;
+                const single = installedIds[0] ?? "claude";
                 return (
                   <Section title="Defaults" description="Which agent hosts a new chat (the + button and the tab dropdown).">
                     <SettingRow title="Default agent" description={multi ? "Pick an agent to start new chats without being asked — or keep “Ask every time” to choose per chat." : "Only one agent was found on this machine, so it's always used. This choice unlocks when a second agent is detected."}>
@@ -258,7 +257,7 @@ export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgen
                         {multi ? (
                           <>
                             <option value="ask">Ask every time</option>
-                            {AGENT_IDS.map(id => <option key={id} value={id}>{AGENTS[id].label}</option>)}
+                            {installedIds.map(id => <option key={id} value={id}>{AGENTS[id].label}</option>)}
                           </>
                         ) : (
                           <option value={single}>{AGENTS[single as AgentId].label}</option>
@@ -324,6 +323,13 @@ export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgen
                   <Toggle checked={showRateLimitInSidebarCodex} onChange={onSetShowRateLimitInSidebarCodex} />
                 </SettingRow>
               </Section>
+              </div>}
+              </div>
+
+              <div className="settings-agent-block">
+              <AgentHeader icon={<AgentIcon agent="cursor" size={18} />} name={AGENTS.cursor.label} tagline={AGENTS.cursor.tagline} state={agentProbes.cursor} onRefresh={probeAgents} open={expandedAgents.cursor} onToggle={() => toggleAgent("cursor")} tt={tt} />
+              {expandedAgents.cursor && <div className="settings-agent-body">
+              <div className="settings-agent-empty">Cursor is integrated: its sessions appear in your project and home lists (click to resume) and its rules, instructions, and MCP servers show in the context tree. No setup needed — everything is read straight from <code>~/.cursor</code>. Cursor doesn't expose token, cost, or rate-limit data locally, so those aren't shown.</div>
               </div>}
               </div>
             </>
