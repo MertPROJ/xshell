@@ -149,7 +149,7 @@ export default function App() {
   // Which agent CLIs exist on this machine — gates every agent-choice surface (plus
   // button, dropdown group, default-agent setting). Until the probe lands we assume
   // Claude-only, which matches the app's pre-Codex behavior.
-  const [installedAgents, setInstalledAgents] = useState<Record<AgentId, boolean>>({ claude: true, codex: false });
+  const [installedAgents, setInstalledAgents] = useState<Record<AgentId, boolean>>(() => Object.fromEntries(AGENT_IDS.map(id => [id, id === "claude"])) as Record<AgentId, boolean>);
   // "ask" = show the agent picker dialog per new chat (only relevant with 2+ agents).
   const [defaultAgent, setDefaultAgent] = useState<"ask" | AgentId>("ask");
   // Project waiting on an agent choice — set when a new chat needs the picker dialog.
@@ -510,7 +510,7 @@ export default function App() {
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("theme", next); } catch (_) {}
   }, []);
 
-  const persistDefaultAgent = useCallback(async (next: "ask" | "claude" | "codex") => {
+  const persistDefaultAgent = useCallback(async (next: "ask" | AgentId) => {
     setDefaultAgent(next);
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("default_agent", next); } catch (_) {}
   }, []);
@@ -652,17 +652,17 @@ export default function App() {
       }
     }
     const tabId = `terminal-new-${Date.now()}`;
-    if (agent === "codex") {
-      // Codex has no --session-id equivalent: spawn `codex` bare in the project cwd. The
-      // rollout id only exists once Codex writes it, so the tab starts unlinked.
-      setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: "New Chat", agent: "codex" as const, projectPath: project.path, projectName: project.name, shellMode: "claude" as const, lastActiveAt: Date.now() }]);
-    } else {
+    if (agent === "claude") {
       // Pre-allocate a UUID and pass it to Claude via `--session-id`. Two wins over the old
       // `-n Chat-xxxxxx` approach: (1) we know the JSONL filename from the start, so the polling
       // sync can match by sessionId immediately instead of racing on customTitle; (2) Claude's
       // `ai-title` summary actually fires (it's suppressed when customTitle is set).
       const sessionId = crypto.randomUUID();
       setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: "New Chat", sessionId, agent: "claude" as const, projectPath: project.path, projectName: project.name, shellMode: "claude" as const, lastActiveAt: Date.now() }]);
+    } else {
+      // Codex and Cursor have no --session-id equivalent: spawn the agent bare in the project
+      // cwd. The session id only exists once the agent writes it, so the tab starts unlinked.
+      setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: "New Chat", agent, projectPath: project.path, projectName: project.name, shellMode: "claude" as const, lastActiveAt: Date.now() }]);
     }
     setActiveTabId(tabId);
   }, [installedAgents, defaultAgent]);
