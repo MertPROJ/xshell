@@ -2003,35 +2003,39 @@ fn get_global_rate_limits() -> GlobalRateLimits {
     let stats_dir = home.join(".claude").join("xshell-stats");
     if !stats_dir.exists() { return out; }
 
-    // Find the freshest file by mtime — that's whichever Claude Code refreshed most recently.
-    let mut freshest: Option<(SystemTime, std::path::PathBuf)> = None;
-    for entry in fs::read_dir(&stats_dir).ok().into_iter().flatten().flatten() {
-        if !entry.file_type().map_or(false, |ft| ft.is_file()) { continue; }
-        if let Ok(meta) = entry.metadata() {
-            if let Ok(modified) = meta.modified() {
-                if freshest.as_ref().map_or(true, |(t, _)| modified > *t) {
-                    freshest = Some((modified, entry.path()));
-                }
-            }
-        }
-    }
+    // Collect files newest-first by mtime. We can't just read the single freshest file:
+    // Claude Code omits the `rate_limits` block from ~half of its statusline ticks (e.g. a
+    // session's early ticks before the first API response carries rate-limit headers), and
+    // the hook overwrites the whole payload each tick. So the newest file often lacks rate
+    // limits even when older files hold a valid snapshot. Walk newest→oldest and take the
+    // first file that actually has rate-limit data — last-known-good beats a blank chip,
+    // and rate limits are account-wide + slow-moving so a slightly older snapshot is fine.
+    let mut files: Vec<(SystemTime, std::path::PathBuf)> = fs::read_dir(&stats_dir).ok().into_iter().flatten().flatten()
+        .filter(|e| e.file_type().map_or(false, |ft| ft.is_file()))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    files.sort_by(|a, b| b.0.cmp(&a.0));
 
-    let Some((mtime, path)) = freshest else { return out; };
-    let Ok(content) = fs::read_to_string(&path) else { return out; };
-    let Ok(json): Result<serde_json::Value, _> = serde_json::from_str(&content) else { return out; };
+    for (mtime, path) in &files {
+        let Ok(content) = fs::read_to_string(path) else { continue };
+        let Ok(json): Result<serde_json::Value, _> = serde_json::from_str(&content) else { continue };
+        let Some(rl) = json.get("rate_limits") else { continue };
+        let five = rl.get("five_hour");
+        let seven = rl.get("seven_day");
+        // Require at least one window's percentage to consider this a usable snapshot.
+        let five_pct = five.and_then(|w| w.get("used_percentage")).and_then(|v| v.as_f64());
+        let seven_pct = seven.and_then(|w| w.get("used_percentage")).and_then(|v| v.as_f64());
+        if five_pct.is_none() && seven_pct.is_none() { continue; }
 
-    if let Some(rl) = json.get("rate_limits") {
-        if let Some(fh) = rl.get("five_hour") {
-            out.five_hour_pct = fh.get("used_percentage").and_then(|v| v.as_f64());
-            out.five_hour_resets_at = fh.get("resets_at").and_then(|v| v.as_u64());
-        }
-        if let Some(sd) = rl.get("seven_day") {
-            out.seven_day_pct = sd.get("used_percentage").and_then(|v| v.as_f64());
-            out.seven_day_resets_at = sd.get("resets_at").and_then(|v| v.as_u64());
-        }
+        out.five_hour_pct = five_pct;
+        out.five_hour_resets_at = five.and_then(|w| w.get("resets_at")).and_then(|v| v.as_u64());
+        out.seven_day_pct = seven_pct;
+        out.seven_day_resets_at = seven.and_then(|w| w.get("resets_at")).and_then(|v| v.as_u64());
+        // Report the freshness of the snapshot we actually used, not the newest file overall.
+        out.last_update_iso = Some(system_time_to_iso(*mtime));
+        out.source_session_id = path.file_stem().map(|s| s.to_string_lossy().into_owned());
+        break;
     }
-    out.last_update_iso = Some(system_time_to_iso(mtime));
-    out.source_session_id = path.file_stem().map(|s| s.to_string_lossy().into_owned());
     out
 }
 
