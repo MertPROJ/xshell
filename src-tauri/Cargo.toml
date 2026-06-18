@@ -21,6 +21,10 @@ serde_json = "1"
 dirs = "6"
 portable-pty = "0.9"
 uuid = { version = "1", features = ["v4"] }
+# Cursor stores chat history in per-chat SQLite (store.db, WAL mode) — bundled so we don't
+# depend on a system libsqlite. md5: Cursor keys chat folders by md5 of the workspace cwd.
+rusqlite = { version = "0.31", features = ["bundled"] }
+md5 = "0.7"
 
 # Dev profile: fast incremental rebuilds, light optimization for deps
 [profile.dev]

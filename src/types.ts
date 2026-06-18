@@ -36,6 +36,11 @@ export interface CodexContext {
   sections: AgentContextSection[];
 }
 
+export interface CursorContext {
+  present: boolean;
+  sections: AgentContextSection[];
+}
+
 // ── Home usage strip (see lib.rs: get_claude_cost_summary / get_codex_usage) ──
 
 export interface DailyUsd { date: string; usd: number }

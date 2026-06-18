@@ -565,6 +565,7 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .session-model-sonnet  { background: color-mix(in oklab, #3498DB 22%, var(--bg-elevated)); color: #7CBBE6; }
 .session-model-haiku   { background: var(--bg-elevated); color: var(--text-tertiary); }
 .session-model-gpt     { background: color-mix(in oklab, #10A37F 20%, var(--bg-elevated)); color: #58C4A3; }
+.session-model-cursor  { background: color-mix(in oklab, #6E8CDC 22%, var(--bg-elevated)); color: #93acec; }
 .session-model-unknown { background: var(--bg-elevated); color: var(--text-muted); }
 
 /* Context mini-bar: fixed-width track, colored fill that grows with percentage. The color
