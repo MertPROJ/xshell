@@ -495,12 +495,13 @@ export function SkillsPanel({ projectPath, projectName, agentPresence }: Props) 
 
   // ─── Agent-conditional visibility ──────────────────────────────────
   // Claude roots show when there's any Claude content or the project has Claude sessions —
-  // a pure Codex/Cursor user (no ~/.claude content) never reads Claude vocabulary. Each
-  // other agent's root shows when its artifacts or sessions exist for this project. If no
-  // agent has anything, fall back to the Claude roots (the pre-multi-agent empty state).
+  // a pure Codex/Cursor user (no ~/.claude content) never reads Claude vocabulary. The
+  // Codex/Cursor roots show only when they actually have context to render — having merely
+  // used the agent in this project (or a Codex trust flag) isn't enough to warrant an empty
+  // "Nothing here yet" root. If nothing at all has content, fall back to the Claude roots.
   const claudeContentCount = data ? data.personal_skills.length + data.project_skills.length + data.plugins.length + data.user_mcps.length + data.project_mcps.length + data.subagents.length + data.slash_commands.length + data.hooks.length + data.claude_md_files.length + data.settings_sources.filter(s => s.exists).length : 0;
-  const codexVisible = !!(codexCtx?.present || agentPresence?.codex);
-  const cursorVisible = !!(cursorCtx?.present || agentPresence?.cursor);
+  const codexVisible = (codexCtx?.sections.length ?? 0) > 0;
+  const cursorVisible = (cursorCtx?.sections.length ?? 0) > 0;
   let claudeVisible = claudeContentCount + memories.items.length > 0 || !!agentPresence?.claude;
   if (!claudeVisible && !codexVisible && !cursorVisible) claudeVisible = true;
   // When Claude shares the tree with another agent, its roots name their agent in the hint
