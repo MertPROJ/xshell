@@ -274,6 +274,7 @@ export interface Tab {
   agent?: 'claude' | 'codex' | 'cursor'; // which agent CLI the tab hosts; default 'claude'
   groupId?: string; // when set, the tab is a member of a group (not standalone in the tab bar)
   lastActiveAt?: number; // ms epoch — bumped whenever the tab becomes the focused leaf; drives "recent" sort in the tab search dialog
+  createdAt?: number; // ms epoch at tab creation (stable, unlike lastActiveAt) — lets the title-sync link an unlinked agent tab to a session that appeared after it opened
 }
 
 // Binary layout tree for a group's split view. Leaves point at tab ids.

@@ -350,22 +350,38 @@ export default function App() {
     if (tabs.length === 0) return;
 
     const syncTitles = async () => {
-      // Collect unique encoded project names from open tabs
-      const projectPaths = [...new Set(tabs.filter(t => t.projectPath).map(t => t.projectPath!.toLowerCase()))];
+      // Distinct original-cased project paths across open tabs (encoding is case-sensitive).
+      const origPaths = [...new Map(tabs.filter(t => t.projectPath).map(t => [t.projectPath!.toLowerCase(), t.projectPath!])).values()];
       const projectMap = new Map<string, ProjectInfo>();
       for (const p of allProjects) projectMap.set(p.path.toLowerCase(), p);
 
-      for (const pp of projectPaths) {
-        const proj = projectMap.get(pp);
-        if (!proj?.encoded_name) continue;
+      for (const origPath of origPaths) {
+        const pp = origPath.toLowerCase();
+        // Prefer Claude's recorded encoded name; otherwise mirror the Rust encoding so the
+        // poll also reaches Codex/Cursor-only projects (which carry no Claude encoded_name).
+        const encodedName = projectMap.get(pp)?.encoded_name || origPath.replace(/[^a-zA-Z0-9]/g, "-");
+        if (!encodedName) continue;
         try {
-          const sessions = await invoke<SessionInfo[]>("get_sessions", { encodedName: proj.encoded_name });
+          const sessions = await invoke<SessionInfo[]>("get_sessions", { encodedName });
           setTabs(prev => {
             let changed = false;
+            // Sessions already linked to an open tab — an unlinked tab must not claim them.
+            const claimed = new Set(prev.map(t => t.sessionId).filter(Boolean) as string[]);
             const next = prev.map(tab => {
               if (tab.projectPath?.toLowerCase() !== pp) return tab;
-              // Tabs are created with a pre-allocated sessionId (see handleNewChat), so we only
-              // ever match on that — picks up `/rename`, `ai-title`, and first-prompt fallback alike.
+              // Link an unlinked new-chat tab (Codex — which has no pre-created id — or a Cursor
+              // tab whose create-chat fell back) to its freshly-created session: newest unclaimed
+              // session of the same agent that appeared after the tab opened and already has a
+              // real title (not the bare "Session <id>" fallback), so we rename straight to the
+              // meaningful name instead of flashing an intermediate one.
+              if (!tab.sessionId && tab.agent && tab.agent !== "claude") {
+                const candidate = sessions
+                  .filter(s => s.agent === tab.agent && !claimed.has(s.id) && !s.title.startsWith("Session ") && new Date(s.timestamp).getTime() >= (tab.createdAt ?? 0))
+                  .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0];
+                if (candidate) { claimed.add(candidate.id); changed = true; return { ...tab, sessionId: candidate.id, title: candidate.title }; }
+                return tab;
+              }
+              // Linked tab: keep its title in sync — picks up `/rename`, ai-title, first-prompt alike.
               if (!tab.sessionId) return tab;
               const match = sessions.find(s => s.id === tab.sessionId);
               if (match && match.title !== tab.title) { changed = true; return { ...tab, title: match.title }; }
@@ -652,17 +668,19 @@ export default function App() {
       }
     }
     const tabId = `terminal-new-${Date.now()}`;
+    const base = { id: tabId, type: "terminal" as const, title: "New Chat", projectPath: project.path, projectName: project.name, shellMode: "claude" as const, lastActiveAt: Date.now(), createdAt: Date.now() };
     if (agent === "claude") {
       // Pre-allocate a UUID and pass it to Claude via `--session-id`. Two wins over the old
       // `-n Chat-xxxxxx` approach: (1) we know the JSONL filename from the start, so the polling
       // sync can match by sessionId immediately instead of racing on customTitle; (2) Claude's
       // `ai-title` summary actually fires (it's suppressed when customTitle is set).
-      const sessionId = crypto.randomUUID();
-      setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: "New Chat", sessionId, agent: "claude" as const, projectPath: project.path, projectName: project.name, shellMode: "claude" as const, lastActiveAt: Date.now() }]);
+      setTabs(prev => [...prev, { ...base, sessionId: crypto.randomUUID(), agent: "claude" as const }]);
     } else {
-      // Codex and Cursor have no --session-id equivalent: spawn the agent bare in the project
-      // cwd. The session id only exists once the agent writes it, so the tab starts unlinked.
-      setTabs(prev => [...prev, { id: tabId, type: "terminal" as const, title: "New Chat", agent, projectPath: project.path, projectName: project.name, shellMode: "claude" as const, lastActiveAt: Date.now() }]);
+      // Codex and Cursor can't pre-assign a session id, so spawn the agent bare in the project
+      // cwd — instant, like Claude. The session id only exists once the agent writes it, so the
+      // tab starts unlinked; the title-sync links it (and renames the tab) once a session with a
+      // real title appears.
+      setTabs(prev => [...prev, { ...base, agent }]);
     }
     setActiveTabId(tabId);
   }, [installedAgents, defaultAgent]);
