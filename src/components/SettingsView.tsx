@@ -95,7 +95,7 @@ function AgentHeader({ icon, name, tagline, state, onRefresh, open, onToggle, tt
       ) : (
         <span className="settings-version-chip settings-version-chip-muted">Not found</span>
       )}
-      <button className="btn btn-ghost settings-action-btn" onClick={(e) => { e.stopPropagation(); onRefresh(); }} disabled={loading}><RefreshCw size={11} /> Re-check</button>
+      <button className="settings-agent-recheck" onClick={(e) => { e.stopPropagation(); onRefresh(); }} disabled={loading} {...ttProps(tt, "Re-check")}><RefreshCw size={12} className={loading ? "settings-spin" : ""} /></button>
     </div>
   );
 }
@@ -269,7 +269,7 @@ export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgen
               })()}
 
               <div className="settings-agent-block">
-              <AgentHeader icon={<AgentIcon agent="claude" size={18} />} name={AGENTS.claude.label} tagline={AGENTS.claude.tagline} state={agentProbes.claude} onRefresh={probeAgents} open={expandedAgents.claude} onToggle={() => toggleAgent("claude")} tt={tt} />
+              <AgentHeader icon={<AgentIcon agent="claude" size={15} />} name={AGENTS.claude.label} tagline={AGENTS.claude.tagline} state={agentProbes.claude} onRefresh={probeAgents} open={expandedAgents.claude} onToggle={() => toggleAgent("claude")} tt={tt} />
               {expandedAgents.claude && <div className="settings-agent-body">
               <div className="settings-connect-hero">
                 <div className="settings-connect-hero-icon"><Sparkles size={18} /></div>
@@ -312,7 +312,7 @@ export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgen
               </div>
 
               <div className="settings-agent-block">
-              <AgentHeader icon={<AgentIcon agent="codex" size={18} />} name={AGENTS.codex.label} tagline={AGENTS.codex.tagline} state={agentProbes.codex} onRefresh={probeAgents} open={expandedAgents.codex} onToggle={() => toggleAgent("codex")} tt={tt} />
+              <AgentHeader icon={<AgentIcon agent="codex" size={15} />} name={AGENTS.codex.label} tagline={AGENTS.codex.tagline} state={agentProbes.codex} onRefresh={probeAgents} open={expandedAgents.codex} onToggle={() => toggleAgent("codex")} tt={tt} />
               {expandedAgents.codex && <div className="settings-agent-body">
               <div className="settings-agent-empty">Codex is integrated: its sessions appear in your project and home lists (click to resume), token usage feeds the project stats, and AGENTS.md, prompts, and MCP servers show in the context tree. No setup needed — everything is read straight from <code>~/.codex</code>.</div>
               <Section title="Session metrics" description="Codex reports usage in its session files directly — no hook or setup required, so these work out of the box.">
@@ -327,7 +327,7 @@ export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgen
               </div>
 
               <div className="settings-agent-block">
-              <AgentHeader icon={<AgentIcon agent="cursor" size={18} />} name={AGENTS.cursor.label} tagline={AGENTS.cursor.tagline} state={agentProbes.cursor} onRefresh={probeAgents} open={expandedAgents.cursor} onToggle={() => toggleAgent("cursor")} tt={tt} />
+              <AgentHeader icon={<AgentIcon agent="cursor" size={15} />} name={AGENTS.cursor.label} tagline={AGENTS.cursor.tagline} state={agentProbes.cursor} onRefresh={probeAgents} open={expandedAgents.cursor} onToggle={() => toggleAgent("cursor")} tt={tt} />
               {expandedAgents.cursor && <div className="settings-agent-body">
               <div className="settings-agent-empty">Cursor is integrated: its sessions appear in your project and home lists (click to resume) and its rules, instructions, and MCP servers show in the context tree. No setup needed — everything is read straight from <code>~/.cursor</code>. Cursor doesn't expose token, cost, or rate-limit data locally, so those aren't shown.</div>
               </div>}

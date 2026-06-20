@@ -135,10 +135,10 @@ export default function App() {
   // 400 reads heavier and helps compensate for the WebGL renderer's grayscale-only AA.
   const [terminalFontWeight, setTerminalFontWeight] = useState(400);
   // Spawn each restored tab's PTY on app launch instead of deferring until the user clicks the
-  // tab. Default ON — claude takes a few seconds to boot, so eagerly initing means the session
-  // is ready (or close to it) by the time the user switches to the tab. The "Starting Claude…"
-  // overlay still shows if the user gets there before the first byte of output.
-  const [eagerInitTabs, setEagerInitTabs] = useState(true);
+  // tab. Default OFF — eager-init spawns every restored agent at once on launch (heavy, and
+  // burns rate limits on sessions you may not open). Opt in via Settings; a persisted choice
+  // overrides this default. The "Starting…" overlay covers the per-tab boot when deferred.
+  const [eagerInitTabs, setEagerInitTabs] = useState(false);
   const [defaultShell, setDefaultShell] = useState<string>(getDefaultShellId());
   // Cost vs Tokens for the per-project stats panel. Global, not per-project — reflects what
   // the user cares about generally, not a trait of any one project.

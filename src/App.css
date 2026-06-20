@@ -874,18 +874,22 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 /* Agents tab — one block per supported CLI agent (Claude Code, Codex). The header card
    carries identity (icon, name, resolved binary path) plus a live found / not-found chip
    sourced from detect_agent_binary. */
-.settings-agent-block { margin-bottom: 20px; }
-.settings-agent-header { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.settings-agent-block { margin-bottom: 8px; }
+.settings-agent-header { display: flex; align-items: center; gap: 9px; padding: 7px 10px; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); cursor: pointer; transition: background 0.12s, border-color 0.12s; }
 .settings-agent-header:hover { background: var(--bg-hover); border-color: var(--border-strong); }
 .settings-agent-chevron { color: var(--text-tertiary); transition: transform 0.15s; flex-shrink: 0; }
 .settings-agent-header.is-open .settings-agent-chevron { transform: rotate(90deg); }
-.settings-agent-body { padding-top: 14px; }
-.settings-agent-icon { width: 32px; height: 32px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--bg-elevated); color: var(--text-secondary); border-radius: 8px; }
+.settings-agent-body { padding: 10px 2px 4px; }
+.settings-agent-icon { width: 24px; height: 24px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--bg-elevated); color: var(--text-secondary); border-radius: var(--radius-sm); }
 .settings-agent-text { flex: 1; min-width: 0; }
-.settings-agent-name { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; }
-.settings-agent-sub { font-size: 11px; color: var(--text-tertiary); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-agent-name { font-size: 12px; font-weight: 600; color: var(--text-primary); margin-bottom: 1px; }
+.settings-agent-sub { font-size: 10px; color: var(--text-tertiary); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-agent-path { font-family: var(--font-mono); font-size: 10px; }
 .settings-agent-header .settings-version-chip { flex-shrink: 0; }
+/* Icon-only re-check button — declutters the row vs. an icon+label button. */
+.settings-agent-recheck { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; border: 1px solid var(--border-default); border-radius: var(--radius-sm); color: var(--text-tertiary); cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s; }
+.settings-agent-recheck:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-strong); }
+.settings-agent-recheck:disabled { opacity: 0.5; cursor: default; }
 /* Neutral chip variant for "checking…" and "not found" — deliberately not red: a missing
    optional agent isn't an error state. */
 .settings-version-chip-muted { background: var(--bg-elevated); color: var(--text-tertiary); border: 1px solid var(--border-default); }
