@@ -9,6 +9,9 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 use tauri::ipc::{Channel, Response};
 use tauri::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::response::IntoResponse;
+use futures_util::{SinkExt, StreamExt};
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -74,7 +77,10 @@ struct TerminalHandle {
 }
 
 pub struct AppState {
-    terminals: Mutex<HashMap<String, TerminalHandle>>,
+    // Arc so the web-hosting server (a separate runtime thread) can hold a clone of the same
+    // map and write/resize the very PTYs the desktop UI is driving. All Tauri command call
+    // sites keep using `state.terminals.lock()` unchanged — Arc derefs to the Mutex.
+    terminals: Arc<Mutex<HashMap<String, TerminalHandle>>>,
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -1882,6 +1888,7 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
     // exit never races ahead of the final output chunk.
     let pending_f = pending;
     let done_f = done;
+    let host_id = id.clone();
     std::thread::spawn(move || {
         let (lock, cv) = &*pending_f;
         loop {
@@ -1900,6 +1907,22 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
             let chunk = std::mem::take(&mut *lock.lock().unwrap());
             if chunk.is_empty() {
                 continue;
+            }
+            // Fan out to any web viewers hosting this terminal. The AtomicUsize gate keeps the
+            // common (not-hosting) path free of the global lock — we only touch the registry
+            // when at least one terminal is being hosted. A bounded ring keeps recent output so
+            // a viewer joining mid-session gets the current screen replayed on connect.
+            if HOST_COUNT.load(Ordering::Relaxed) > 0 {
+                if let Ok(reg) = host_registry().lock() {
+                    if let Some(h) = reg.get(&host_id) {
+                        let _ = h.tx.send(HostMsg::Data(chunk.clone()));
+                        if let Ok(mut ring) = h.ring.lock() {
+                            ring.extend_from_slice(&chunk);
+                            let overflow = ring.len().saturating_sub(HOST_RING_MAX);
+                            if overflow > 0 { ring.drain(0..overflow); }
+                        }
+                    }
+                }
             }
             if on_data.send(Response::new(chunk)).is_err() {
                 break;
@@ -1923,9 +1946,25 @@ fn write_terminal(state: State<'_, AppState>, id: String, data: String) -> Resul
 
 #[tauri::command]
 fn resize_terminal(state: State<'_, AppState>, id: String, cols: u16, rows: u16) -> Result<(), String> {
-    let terminals = state.terminals.lock().unwrap();
-    if let Some(handle) = terminals.get(&id) {
+    // When a browser owns the grid, the viewer is the source of truth — ignore desktop-driven
+    // resizes entirely so the two can't fight over the single PTY size.
+    let browser_owns = HOST_COUNT.load(Ordering::Relaxed) > 0
+        && host_registry().lock().ok().and_then(|reg| reg.get(&id).map(|h| h.browser_owns.load(Ordering::Relaxed))).unwrap_or(false);
+    if browser_owns { return Ok(()); }
+
+    if let Some(handle) = state.terminals.lock().unwrap().get(&id) {
         handle.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| format!("Resize failed: {}", e))?;
+    }
+    // App-owned grid: record the size and push it to viewers so their xterm matches (they scale
+    // to fit — they don't resize the PTY). This is what decouples the surfaces in this mode:
+    // browser-window resizes only rescale the web view; only the app changes the real grid.
+    if HOST_COUNT.load(Ordering::Relaxed) > 0 {
+        if let Ok(reg) = host_registry().lock() {
+            if let Some(h) = reg.get(&id) {
+                if let Ok(mut sz) = h.size.lock() { *sz = (cols, rows); }
+                let _ = h.tx.send(HostMsg::Size(cols, rows));
+            }
+        }
     }
     Ok(())
 }
@@ -2573,6 +2612,455 @@ async fn detect_agent_binary(binary: String) -> Result<AgentBinaryProbe, String>
     Ok(AgentBinaryProbe { installed: true, path: Some(path), version })
 }
 
+// ── Web hosting (playground) ──────────────────────────────────────────
+// Stream a live agent terminal to a browser over the LAN. `start_hosting` registers a PTY
+// for fan-out (see the flusher above) and lazily boots a single in-process axum server on a
+// dedicated tokio runtime thread. A viewer opens http://<lan-ip>:<port>/t/<id>, enters the
+// 4-digit code, and gets a fully interactive xterm.js session: keystrokes flow back into the
+// same PTY the desktop UI is driving. Local-only for now; the xshell.sh relay comes next.
+//
+// SECURITY NOTE: this is a remote shell. The defence today is (a) the tab id in the URL is an
+// unguessable UUID and (b) a 4-digit code with a 5-attempt cap per socket. That is adequate
+// for a same-network playground, NOT for public exposure — no TLS, no rate-limit across
+// sockets, relay sees plaintext. Harden before putting this on the internet.
+
+use std::sync::atomic::AtomicUsize;
+
+const XSHELL_HOST_PORT: u16 = 8421;
+const HOST_RING_MAX: usize = 256 * 1024;
+static HOST_COUNT: AtomicUsize = AtomicUsize::new(0);
+static HOST_SERVER_PORT: OnceLock<u16> = OnceLock::new();
+// Clone of AppState.terminals, stashed on first host so the server thread can reach the PTYs.
+static HOST_TERMINALS: OnceLock<Arc<Mutex<HashMap<String, TerminalHandle>>>> = OnceLock::new();
+
+// Broadcast item: either raw PTY bytes (→ WS Binary) or a grid-size change (→ WS Text). One
+// channel keeps output and size strictly ordered, so a viewer resizes its grid at the right
+// point in the stream.
+#[derive(Clone)]
+enum HostMsg {
+    Data(Vec<u8>),
+    Size(u16, u16),
+    ReadOnly(bool),
+    // Who owns the grid size: false = app drives (viewers letterbox), true = browser drives
+    // (the viewer fits to its own window and resizes the PTY; the app steps back).
+    Owner(bool),
+}
+
+struct HostedTerminal {
+    tx: tokio::sync::broadcast::Sender<HostMsg>,
+    ring: Arc<Mutex<Vec<u8>>>,
+    pin: String,
+    // Live-toggleable from the host panel. When true the server drops all inbound keystrokes
+    // from web viewers (view-only). An Arc so each socket reads the current value lock-free.
+    read_only: Arc<AtomicBool>,
+    // false = app owns grid size (viewers letterbox); true = the browser owns it (the viewer
+    // fits to its window and drives PTY resizes, the app yields). Live-toggleable.
+    browser_owns: Arc<AtomicBool>,
+    // Current PTY grid. Updated by resize_terminal (app-owned) or by a viewer's resize
+    // (browser-owned). Sent to each viewer on join so its xterm grid matches before the replay.
+    size: Arc<Mutex<(u16, u16)>>,
+}
+
+// Serve the SAME bundled JetBrains Mono the desktop uses, so the viewer renders Claude's
+// logo / box-drawing / glyphs at the right metrics instead of a generic system monospace.
+// Embedded in the binary so the page is self-contained (no font CDN dependency).
+const FONT_REGULAR: &[u8] = include_bytes!("../../src/assets/fonts/JetBrainsMono-Regular.woff2");
+const FONT_BOLD: &[u8] = include_bytes!("../../src/assets/fonts/JetBrainsMono-Bold.woff2");
+
+fn host_registry() -> &'static Mutex<HashMap<String, HostedTerminal>> {
+    static R: OnceLock<Mutex<HashMap<String, HostedTerminal>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HostInfo {
+    pub url: String,
+    pub pin: String,
+    pub port: u16,
+    pub read_only: bool,
+    pub browser_owns: bool,
+}
+
+// Best-effort LAN address: open a UDP socket "towards" a public IP and read back which local
+// interface the OS would route through. No packets are actually sent. Falls back to localhost.
+fn lan_ip() -> String {
+    use std::net::UdpSocket;
+    UdpSocket::bind("0.0.0.0:0").ok()
+        .and_then(|s| s.connect("8.8.8.8:80").ok().map(|_| s))
+        .and_then(|s| s.local_addr().ok())
+        .map(|a| a.ip().to_string())
+        .unwrap_or_else(|| "localhost".to_string())
+}
+
+// 4-digit code derived from random UUID bytes — no extra rng dependency.
+fn gen_pin() -> String {
+    let b = uuid::Uuid::new_v4();
+    let bytes = b.as_bytes();
+    let n = u16::from_le_bytes([bytes[0], bytes[1]]) as u32 % 10000;
+    format!("{:04}", n)
+}
+
+fn host_write_to_pty(id: &str, data: &[u8]) {
+    if let Some(t) = HOST_TERMINALS.get() {
+        if let Ok(mut g) = t.lock() {
+            if let Some(h) = g.get_mut(id) {
+                let _ = h.writer.write_all(data);
+                let _ = h.writer.flush();
+            }
+        }
+    }
+}
+
+// Resize the live PTY from the server side — used when a browser-owned viewer drives the size.
+fn host_write_resize(id: &str, cols: u16, rows: u16) {
+    if let Some(t) = HOST_TERMINALS.get() {
+        if let Ok(g) = t.lock() {
+            if let Some(h) = g.get(id) {
+                let _ = h.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+            }
+        }
+    }
+}
+
+// Boot the axum server exactly once, on its own multi-thread tokio runtime so it never
+// contends with Tauri's runtime. Blocks only until the listener binds, then returns the port.
+fn ensure_host_server() -> Result<u16, String> {
+    if let Some(p) = HOST_SERVER_PORT.get() { return Ok(*p); }
+    let (tx, rx) = std::sync::mpsc::channel::<Result<u16, String>>();
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+            Ok(rt) => rt,
+            Err(e) => { let _ = tx.send(Err(format!("runtime: {e}"))); return; }
+        };
+        rt.block_on(async move {
+            let app = axum::Router::new()
+                .route("/t/:id", axum::routing::get(host_serve_page))
+                .route("/ws/:id", axum::routing::get(host_ws_handler))
+                .route("/fonts/:file", axum::routing::get(host_font));
+            let addr = std::net::SocketAddr::from(([0, 0, 0, 0], XSHELL_HOST_PORT));
+            match tokio::net::TcpListener::bind(addr).await {
+                Ok(listener) => {
+                    let _ = tx.send(Ok(XSHELL_HOST_PORT));
+                    let _ = axum::serve(listener, app).await;
+                }
+                Err(e) => { let _ = tx.send(Err(format!("bind {addr}: {e}"))); }
+            }
+        });
+    });
+    let port = rx.recv().map_err(|e| e.to_string())??;
+    let _ = HOST_SERVER_PORT.set(port);
+    Ok(port)
+}
+
+async fn host_serve_page(axum::extract::Path(_id): axum::extract::Path<String>) -> axum::response::Html<String> {
+    axum::response::Html(HOST_PAGE_HTML.to_string())
+}
+
+async fn host_font(axum::extract::Path(file): axum::extract::Path<String>) -> axum::response::Response {
+    let bytes: &'static [u8] = if file.contains("Bold") { FONT_BOLD } else { FONT_REGULAR };
+    ([(axum::http::header::CONTENT_TYPE, "font/woff2"), (axum::http::header::CACHE_CONTROL, "public, max-age=31536000")], bytes).into_response()
+}
+
+async fn host_ws_handler(ws: WebSocketUpgrade, axum::extract::Path(id): axum::extract::Path<String>) -> axum::response::Response {
+    ws.on_upgrade(move |socket| host_handle_socket(socket, id))
+}
+
+async fn host_handle_socket(mut socket: WebSocket, id: String) {
+    // Snapshot what we need, then DROP the (std) lock before any await — holding a MutexGuard
+    // across .await would make this future !Send, which on_upgrade rejects.
+    let snapshot = {
+        let reg = host_registry().lock().unwrap();
+        reg.get(&id).map(|h| (
+            h.pin.clone(), h.tx.clone(),
+            h.ring.lock().map(|r| r.clone()).unwrap_or_default(),
+            h.read_only.clone(),
+            h.browser_owns.clone(),
+            h.size.clone(),
+        ))
+    };
+    let (pin, tx, ring_snapshot, read_only, browser_owns, size_arc) = match snapshot {
+        Some(v) => v,
+        None => { let _ = socket.send(Message::Close(None)).await; return; }
+    };
+    let size = size_arc.lock().map(|s| *s).unwrap_or((80, 24));
+    let mut rx = tx.subscribe();
+
+    // Gate on the 4-digit code: client sends {"type":"pin","code":"1234"} first. Cap attempts
+    // per socket so a single connection can't brute-force all 10k combinations.
+    let mut attempts = 0u8;
+    let authed = loop {
+        match socket.recv().await {
+            Some(Ok(Message::Text(t))) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+                    if v.get("type").and_then(|x| x.as_str()) == Some("pin") {
+                        let code = v.get("code").and_then(|x| x.as_str()).unwrap_or("");
+                        if code == pin { break true; }
+                        attempts += 1;
+                        let _ = socket.send(Message::Text("{\"type\":\"denied\"}".into())).await;
+                        if attempts >= 5 { break false; }
+                    }
+                }
+            }
+            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break false,
+            _ => {}
+        }
+    };
+    if !authed { let _ = socket.send(Message::Close(None)).await; return; }
+
+    // Hand the viewer its starting state: read-only flag, who owns the grid size, the current
+    // grid (so its xterm matches before any bytes), then the ring replay.
+    let _ = socket.send(Message::Text(format!("{{\"type\":\"ok\",\"readOnly\":{}}}", read_only.load(Ordering::Relaxed)))).await;
+    let _ = socket.send(Message::Text(format!("{{\"type\":\"owner\",\"browser\":{}}}", browser_owns.load(Ordering::Relaxed)))).await;
+    let _ = socket.send(Message::Text(format!("{{\"type\":\"size\",\"cols\":{},\"rows\":{}}}", size.0, size.1))).await;
+    if !ring_snapshot.is_empty() { let _ = socket.send(Message::Binary(ring_snapshot)).await; }
+
+    let (mut sink, mut stream) = socket.split();
+
+    // Outbound: PTY bytes → Binary; grid-size changes → Text. A lagging slow viewer skips ahead
+    // (Lagged); the desktop repaints the TUI on its next frame anyway.
+    let out = tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(HostMsg::Data(bytes)) => { if sink.send(Message::Binary(bytes)).await.is_err() { break; } }
+                Ok(HostMsg::Size(c, r)) => { if sink.send(Message::Text(format!("{{\"type\":\"size\",\"cols\":{},\"rows\":{}}}", c, r))).await.is_err() { break; } }
+                Ok(HostMsg::ReadOnly(ro)) => { if sink.send(Message::Text(format!("{{\"type\":\"readonly\",\"value\":{}}}", ro))).await.is_err() { break; } }
+                Ok(HostMsg::Owner(b)) => { if sink.send(Message::Text(format!("{{\"type\":\"owner\",\"browser\":{}}}", b))).await.is_err() { break; } }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+        let _ = sink.send(Message::Close(None)).await;
+    });
+
+    // Inbound: keystrokes arrive as Binary (raw stdin), dropped when read-only. Text is a resize
+    // control — honored only while the browser owns the grid; then we resize the PTY, record the
+    // new size, and fan it out so any other viewers follow. Both flags are read live.
+    while let Some(Ok(msg)) = stream.next().await {
+        match msg {
+            Message::Binary(b) => { if !read_only.load(Ordering::Relaxed) { host_write_to_pty(&id, &b); } }
+            Message::Text(t) => {
+                if browser_owns.load(Ordering::Relaxed) {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+                        if v.get("type").and_then(|x| x.as_str()) == Some("resize") {
+                            let cols = v.get("cols").and_then(|x| x.as_u64()).unwrap_or(80) as u16;
+                            let rows = v.get("rows").and_then(|x| x.as_u64()).unwrap_or(24) as u16;
+                            host_write_resize(&id, cols, rows);
+                            if let Ok(mut s) = size_arc.lock() { *s = (cols, rows); }
+                            let _ = tx.send(HostMsg::Size(cols, rows));
+                        }
+                    }
+                }
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+    out.abort();
+}
+
+#[tauri::command]
+fn start_hosting(state: State<'_, AppState>, id: String, cols: u16, rows: u16, read_only: bool, browser_owns: bool) -> Result<HostInfo, String> {
+    // Make the live PTY map reachable from the server thread (first host only).
+    let _ = HOST_TERMINALS.set(state.terminals.clone());
+    let port = ensure_host_server()?;
+
+    let mut reg = host_registry().lock().map_err(|e| e.to_string())?;
+    // Re-hosting an already-hosted terminal just returns its current info (idempotent toggle).
+    if let Some(h) = reg.get(&id) {
+        return Ok(HostInfo { url: format!("http://{}:{}/t/{}", lan_ip(), port, id), pin: h.pin.clone(), port, read_only: h.read_only.load(Ordering::Relaxed), browser_owns: h.browser_owns.load(Ordering::Relaxed) });
+    }
+    let (tx, _rx) = tokio::sync::broadcast::channel::<HostMsg>(1024);
+    let pin = gen_pin();
+    reg.insert(id.clone(), HostedTerminal {
+        tx, ring: Arc::new(Mutex::new(Vec::new())), pin: pin.clone(),
+        read_only: Arc::new(AtomicBool::new(read_only)),
+        browser_owns: Arc::new(AtomicBool::new(browser_owns)),
+        size: Arc::new(Mutex::new((cols, rows))),
+    });
+    HOST_COUNT.fetch_add(1, Ordering::Relaxed);
+
+    Ok(HostInfo { url: format!("http://{}:{}/t/{}", lan_ip(), port, id), pin, port, read_only, browser_owns })
+}
+
+#[tauri::command]
+fn stop_hosting(id: String) -> Result<(), String> {
+    let mut reg = host_registry().lock().map_err(|e| e.to_string())?;
+    if reg.remove(&id).is_some() {
+        HOST_COUNT.fetch_sub(1, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+// Live toggle between view-only and interactive without dropping connected viewers — the WS
+// handlers read this AtomicBool per keystroke.
+#[tauri::command]
+fn set_hosting_read_only(id: String, read_only: bool) -> Result<(), String> {
+    let reg = host_registry().lock().map_err(|e| e.to_string())?;
+    if let Some(h) = reg.get(&id) {
+        h.read_only.store(read_only, Ordering::Relaxed);
+        let _ = h.tx.send(HostMsg::ReadOnly(read_only));
+    }
+    Ok(())
+}
+
+// Live toggle of grid-size ownership. Switching to browser-owned hands the size to the next
+// viewer resize; switching back to app-owned lets the desktop reclaim it on its next fit.
+#[tauri::command]
+fn set_hosting_size_owner(id: String, browser_owns: bool) -> Result<(), String> {
+    let reg = host_registry().lock().map_err(|e| e.to_string())?;
+    if let Some(h) = reg.get(&id) {
+        h.browser_owns.store(browser_owns, Ordering::Relaxed);
+        let _ = h.tx.send(HostMsg::Owner(browser_owns));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn hosting_status(id: String) -> Option<HostInfo> {
+    let port = *HOST_SERVER_PORT.get()?;
+    let reg = host_registry().lock().ok()?;
+    let h = reg.get(&id)?;
+    Some(HostInfo { url: format!("http://{}:{}/t/{}", lan_ip(), port, id), pin: h.pin.clone(), port, read_only: h.read_only.load(Ordering::Relaxed), browser_owns: h.browser_owns.load(Ordering::Relaxed) })
+}
+
+// Self-contained viewer page. Mirrors the desktop TerminalTab xterm config so the web render
+// matches the app: GPU WebGL renderer (kills the half-block seams in Claude's banner), Unicode
+// 11 width tables (correct emoji/box-drawing/CJK cell widths), the bundled JetBrains Mono served
+// from /fonts (right glyph metrics), and the full brand palette. xterm core + addons load from
+// the jsdelivr CDN (the page is served by our own server, so no Tauri CSP applies); the font is
+// local. PIN gate overlays the terminal until the server returns {"type":"ok"}.
+const HOST_PAGE_HTML: &str = r##"<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>xshell · hosted terminal</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
+<style>
+  @font-face { font-family:"JetBrains Mono"; font-weight:400; font-style:normal; font-display:block; src:url("/fonts/JetBrainsMono-Regular.woff2") format("woff2"); }
+  @font-face { font-family:"JetBrains Mono"; font-weight:700; font-style:normal; font-display:block; src:url("/fonts/JetBrainsMono-Bold.woff2") format("woff2"); }
+  html,body{margin:0;height:100%;background:#1c1c1b;font-family:"JetBrains Mono",Consolas,Menlo,monospace}
+  /* FOLLOW (default): center the fixed host grid and scale the font to fit (letterboxed) —
+     resizing this window never touches the PTY. DRIVE (body.drive): the terminal fills the
+     window so FitAddon can size the grid to it and push that size to the PTY. */
+  #wrap{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  #term{}
+  body.drive #wrap{display:block}
+  body.drive #term{position:absolute;inset:0}
+  #ro{position:fixed;top:8px;right:10px;z-index:8;display:none;align-items:center;gap:5px;padding:3px 9px;
+      border-radius:999px;background:rgba(90,176,240,.16);border:1px solid rgba(90,176,240,.4);color:#9cd2ff;
+      font-size:11px;font-weight:600;letter-spacing:.02em}
+  #gate{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+        gap:14px;background:rgba(20,20,19,.92);z-index:10;color:#faf9f5}
+  #gate h1{font-size:15px;font-weight:600;margin:0;letter-spacing:.02em}
+  #gate p{margin:0;font-size:12px;color:#b0aea5}
+  #pin{width:160px;text-align:center;font-size:28px;letter-spacing:.5em;padding:10px;border-radius:8px;
+       border:1px solid #5e5d59;background:#141413;color:#faf9f5;outline:none;font-family:inherit}
+  #pin:focus{border-color:#c96442}
+  #go{padding:9px 22px;border:none;border-radius:8px;background:#c96442;color:#fff;font-size:13px;font-weight:600;cursor:pointer}
+  #err{color:#d97757;font-size:12px;min-height:14px}
+</style></head>
+<body>
+  <div id="ro">● View only</div>
+  <div id="wrap"><div id="term"></div></div>
+  <div id="gate">
+    <h1>xshell · hosted terminal</h1>
+    <p>Enter the 4-digit code shown in the app</p>
+    <input id="pin" inputmode="numeric" maxlength="4" placeholder="••••" autofocus>
+    <button id="go">Connect</button>
+    <div id="err"></div>
+  </div>
+<script>
+  var PALETTE = {
+    background:"#1c1c1b", foreground:"#faf9f5", cursor:"#c96442", cursorAccent:"#141413",
+    selectionBackground:"rgba(201,100,66,0.3)", selectionForeground:"#faf9f5",
+    black:"#30302e", red:"#b53333", green:"#4a9968", yellow:"#c96442", blue:"#3898ec",
+    magenta:"#9a6dd7", cyan:"#4a9999", white:"#b0aea5",
+    brightBlack:"#5e5d59", brightRed:"#d97757", brightGreen:"#6cc088", brightYellow:"#d97757",
+    brightBlue:"#5ab0f0", brightMagenta:"#b088e0", brightCyan:"#6cc0c0", brightWhite:"#faf9f5"
+  };
+  var id = location.pathname.split('/').pop();
+  var proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  var ws = new WebSocket(proto + '://' + location.host + '/ws/' + id);
+  ws.binaryType = 'arraybuffer';
+  var BASE_FONT = 14;
+  var term = new Terminal({
+    theme: PALETTE,
+    fontFamily: '"JetBrains Mono", Consolas, "Cascadia Mono", Menlo, monospace',
+    fontSize: BASE_FONT, fontWeight: 300, fontWeightBold: 500,
+    cursorBlink: false, cursorStyle: 'bar', cursorInactiveStyle: 'outline',
+    scrollback: 10000, allowProposedApi: true, minimumContrastRatio: 1
+  });
+  term.loadAddon(new WebLinksAddon.WebLinksAddon());
+  // Unicode 11 widths must be set before any layout so column math uses correct cell widths.
+  term.loadAddon(new Unicode11Addon.Unicode11Addon());
+  term.unicode.activeVersion = '11';
+  term.open(document.getElementById('term'));
+  try { var gl = new WebglAddon.WebglAddon(); gl.onContextLoss(function(){ gl.dispose(); }); term.loadAddon(gl); } catch(e){}
+  var fontsReady = (document.fonts && document.fonts.load)
+    ? Promise.allSettled([document.fonts.load('400 14px "JetBrains Mono"'), document.fonts.load('700 14px "JetBrains Mono"')])
+    : Promise.resolve();
+
+  var fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+
+  var authed = false, readOnly = false, browserOwns = false, enc = new TextEncoder();
+  var hostCols = 0, hostRows = 0;
+
+  function screenEl(){ return term.element && term.element.querySelector('.xterm-screen'); }
+  // FOLLOW mode (app owns the grid): render the host's fixed grid and scale the FONT so it
+  // fills the window — letterboxed, never clipped. Measured-then-corrected so xterm's integer
+  // cell rounding can't overshoot the viewport (that was the cut-off). The PTY is never resized.
+  function fitFollow(){
+    if (!hostCols || !hostRows) return;
+    if (term.cols !== hostCols || term.rows !== hostRows) { try { term.resize(hostCols, hostRows); } catch(e){} }
+    var vw = window.innerWidth - 8, vh = window.innerHeight - 8;
+    var s = screenEl(); if (!s || !s.offsetWidth) return;
+    var cw = s.offsetWidth / term.cols, ch = s.offsetHeight / term.rows;
+    var f = Math.max(5, Math.min(40, Math.floor(term.options.fontSize * Math.min(vw / (hostCols * cw), vh / (hostRows * ch)))));
+    term.options.fontSize = f;
+    for (var i = 0; i < 5; i++) { // shrink until the rendered grid truly fits
+      s = screenEl();
+      if (!s || (s.offsetWidth <= vw + 1 && s.offsetHeight <= vh + 1)) break;
+      if (f <= 5) break; f -= 1; term.options.fontSize = f;
+    }
+  }
+  // DRIVE mode (browser owns the grid): native font, fit the grid to THIS window, and push the
+  // new size to the PTY. The desktop yields. This is the "continue in browser" path.
+  function fitDrive(){
+    term.options.fontSize = BASE_FONT;
+    try { fit.fit(); } catch(e){}
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type:'resize', cols: term.cols, rows: term.rows }));
+  }
+  function reflow(){ if (browserOwns) fitDrive(); else fitFollow(); }
+
+  function applySize(cols, rows){ if (browserOwns) return; hostCols = cols; hostRows = rows; fitFollow(); }
+  function setReadOnly(v){ readOnly = v; term.options.disableStdin = v; document.getElementById('ro').style.display = v ? 'inline-flex' : 'none'; }
+  function setOwner(b){ var was = browserOwns; browserOwns = b; document.body.classList.toggle('drive', b); if (b !== was) fontsReady.then(reflow); }
+
+  function connect(){ var c=document.getElementById('pin').value.trim(); if(ws.readyState===1) ws.send(JSON.stringify({type:'pin',code:c})); }
+  ws.onmessage = function(ev){
+    if (typeof ev.data === 'string'){
+      var m = JSON.parse(ev.data);
+      if (m.type === 'ok'){ authed = true; setReadOnly(!!m.readOnly); document.getElementById('gate').style.display='none';
+        fontsReady.then(function(){ reflow(); if(!readOnly) term.focus(); }); }
+      else if (m.type === 'owner'){ setOwner(!!m.browser); }
+      else if (m.type === 'size'){ applySize(m.cols, m.rows); }
+      else if (m.type === 'readonly'){ setReadOnly(!!m.value); }
+      else if (m.type === 'denied'){ document.getElementById('err').textContent = 'Wrong code — try again'; }
+    } else { term.write(new Uint8Array(ev.data)); }
+  };
+  ws.onclose = function(){ term.write('\r\n\x1b[90m[disconnected]\x1b[0m\r\n'); };
+  // Only forward keystrokes when interactive — read-only is also enforced server-side.
+  term.onData(function(d){ if(authed && !readOnly) ws.send(enc.encode(d)); });
+  window.addEventListener('resize', function(){ if (authed) reflow(); });
+  document.getElementById('go').onclick = connect;
+  document.getElementById('pin').addEventListener('keydown', function(e){ if(e.key==='Enter') connect(); });
+</script>
+</body></html>"##;
+
 // ── App Setup ──────────────────────────────────────────────────────────
 
 pub fn run() {
@@ -2581,8 +3069,8 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(AppState { terminals: Mutex::new(HashMap::new()) })
-        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, list_cursor_projects, get_codex_context, get_cursor_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal])
+        .manage(AppState { terminals: Arc::new(Mutex::new(HashMap::new())) })
+        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, list_cursor_projects, get_codex_context, get_cursor_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal, start_hosting, stop_hosting, hosting_status, set_hosting_read_only, set_hosting_size_owner])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

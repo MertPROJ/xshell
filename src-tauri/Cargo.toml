@@ -25,6 +25,13 @@ uuid = { version = "1", features = ["v4"] }
 # depend on a system libsqlite. md5: Cursor keys chat folders by md5 of the workspace cwd.
 rusqlite = { version = "0.31", features = ["bundled"] }
 md5 = "0.7"
+# Web-hosting playground: an in-process HTTP/WebSocket server streams a live terminal to a
+# browser (xterm.js) so a session can be used over the LAN/web. axum carries the WS, tokio
+# runs it on a dedicated runtime thread (kept off Tauri's own runtime), futures-util gives
+# the split/sink/stream combinators the WS pump uses.
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "io-util", "macros"] }
+futures-util = "0.3"
 
 # Dev profile: fast incremental rebuilds, light optimization for deps
 [profile.dev]

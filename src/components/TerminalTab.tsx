@@ -6,12 +6,13 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { GitBranch, ArrowUp, ArrowDown, RefreshCw, ChevronRight, ChevronDown, Plus, Minus, History, GitFork, Pencil, X as XIcon, Check, Search, AlertTriangle, Cloud } from "lucide-react";
+import { GitBranch, ArrowUp, ArrowDown, RefreshCw, ChevronRight, ChevronDown, Plus, Minus, History, GitFork, Pencil, X as XIcon, Check, Search, AlertTriangle, Cloud, Globe, Copy, Smartphone } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { detectMonoFontFamily, ensureMonoFontsLoaded } from "../lib/fonts";
-import type { Tab, GitStatus, GitFile, GitCommit, BranchInfo, SessionInfo, GitBranch as GitBranchEntry } from "../types";
+import type { Tab, GitStatus, GitFile, GitCommit, BranchInfo, SessionInfo, GitBranch as GitBranchEntry, HostInfo } from "../types";
 import { getShellById } from "../shells";
 import { AGENTS } from "../agents";
+import { HostPanel } from "./HostPanel";
 import type { ThemeMode } from "./SettingsView";
 
 const DEFAULT_FONT_SIZE = 14;
@@ -192,7 +193,10 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
   const [isInitializing, setIsInitializing] = useState(true);
   const sawFirstOutputRef = useRef(false);
 
-  const [showGitPanel, setShowGitPanel] = useState(false);
+  // The right rail hosts one panel at a time — git or web-hosting. null = closed.
+  const [activeSidePanel, setActiveSidePanel] = useState<"git" | "host" | null>(null);
+  const showGitPanel = activeSidePanel === "git";
+  const showHostPanel = activeSidePanel === "host";
   const [gitPanelWidth, setGitPanelWidth] = useState(DEFAULT_PANEL);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [gitCommits, setGitCommits] = useState<GitCommit[]>([]);
@@ -232,6 +236,61 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
   // the user wired it up). Stays null when no authoritative data exists; the header then
   // falls back to showing the project path verbatim.
   const [sessionStats, setSessionStats] = useState<SessionInfo | null>(null);
+  // Web-hosting (playground): non-null while this terminal is being streamed to a browser.
+  // The ref mirrors it so the toggle + unmount cleanup read the latest value without re-binding.
+  const [hosting, setHosting] = useState<HostInfo | null>(null);
+  const hostingActiveRef = useRef(false);
+  useEffect(() => { hostingActiveRef.current = !!hosting; }, [hosting]);
+  // Mirrors hosting.browser_owns so the (closure-captured) onResize handler can suppress the
+  // desktop PTY resize when the browser owns the grid, without re-binding.
+  const browserOwnsRef = useRef(false);
+  useEffect(() => { browserOwnsRef.current = !!hosting?.browser_owns; }, [hosting?.browser_owns]);
+
+  const startHosting = useCallback(async ({ readOnly, browserOwns }: { readOnly: boolean; browserOwns: boolean }) => {
+    try {
+      const cols = terminalRef.current?.cols ?? 80;
+      const rows = terminalRef.current?.rows ?? 24;
+      const info = await invoke<HostInfo>("start_hosting", { id: tabRef.current.id, cols, rows, readOnly, browserOwns });
+      setHosting(info);
+    } catch (e) { console.error("start_hosting failed", e); }
+  }, []);
+
+  const stopHosting = useCallback(async () => {
+    try { await invoke("stop_hosting", { id: tabRef.current.id }); } catch (e) { console.error("stop_hosting failed", e); }
+    setHosting(null);
+  }, []);
+
+  // Optimistically flip the local flag, then tell the server (which pushes it to live viewers).
+  const setHostingReadOnly = useCallback(async (readOnly: boolean) => {
+    setHosting(h => h ? { ...h, read_only: readOnly } : h);
+    try { await invoke("set_hosting_read_only", { id: tabRef.current.id, readOnly }); } catch (e) { console.error("set_hosting_read_only failed", e); }
+  }, []);
+
+  // Hand grid ownership between app and browser. When reclaiming for the app, immediately re-fit
+  // and push our size so the PTY snaps back to the desktop window (the server was ignoring our
+  // resizes while the browser owned it).
+  const setHostingSizeOwner = useCallback(async (browserOwns: boolean) => {
+    setHosting(h => h ? { ...h, browser_owns: browserOwns } : h);
+    try { await invoke("set_hosting_size_owner", { id: tabRef.current.id, browserOwns }); } catch (e) { console.error("set_hosting_size_owner failed", e); }
+    if (!browserOwns) {
+      requestAnimationFrame(() => {
+        if (!terminalRef.current || !fitAddonRef.current) return;
+        fitAddonRef.current.fit();
+        invoke("resize_terminal", { id: tabRef.current.id, cols: terminalRef.current.cols, rows: terminalRef.current.rows }).catch(() => {});
+      });
+    }
+  }, []);
+
+  // Restore state if this terminal was already being hosted (e.g. component remounted), and
+  // make sure we stop hosting a PTY that's going away when the tab unmounts (closed).
+  useEffect(() => {
+    let cancelled = false;
+    invoke<HostInfo | null>("hosting_status", { id: tabRef.current.id }).then(info => { if (!cancelled && info) setHosting(info); }).catch(() => {});
+    return () => {
+      cancelled = true;
+      if (hostingActiveRef.current) invoke("stop_hosting", { id: tabRef.current.id }).catch(() => {});
+    };
+  }, []);
 
   const showTt = useCallback((text: string, el: HTMLElement) => setTooltip({ text, rect: el.getBoundingClientRect() }), []);
   const hideTt = useCallback(() => setTooltip(null), []);
@@ -431,6 +490,9 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
       // single call ~150ms after the drag settles.
       let resizeTimer: number | undefined;
       const onResizeDisposable = term.onResize(({ cols, rows }) => {
+        // While a browser owns the grid, the viewer is the source of truth — don't push our
+        // local fit back to the PTY (the backend ignores it anyway; this avoids the churn).
+        if (browserOwnsRef.current) return;
         if (resizeTimer) window.clearTimeout(resizeTimer);
         resizeTimer = window.setTimeout(() => {
           resizeTimer = undefined;
@@ -524,11 +586,11 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     }
   }, [webglRendering]);
 
-  // Refit terminal whenever the git panel opens/closes or resizes
+  // Refit terminal whenever a side panel opens/closes/switches or the rail resizes.
   useEffect(() => {
     if (!fitAddonRef.current) return;
     requestAnimationFrame(() => fitAddonRef.current?.fit());
-  }, [showGitPanel, gitPanelWidth]);
+  }, [activeSidePanel, gitPanelWidth]);
 
   // Live-update the full xterm palette whenever the app theme or the user's bg-override
   // changes. Using `paletteFor` keeps the brand-relative colors (cursor, ANSI) consistent
@@ -878,6 +940,20 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
           <button className="branch-banner-btn" onClick={dismissRenameNotice} aria-label="Dismiss"><XIcon size={12} /></button>
         </div>
       )}
+      {hosting && (
+        <div className="hosting-banner">
+          <Globe size={13} className="hosting-banner-icon" />
+          <span className="hosting-banner-text">
+            <span className="hosting-banner-lead">Live on the web —</span>
+            <a className="hosting-banner-url" href={hosting.url} target="_blank" rel="noreferrer" onClick={(e) => { e.preventDefault(); invoke("open_url", { url: hosting.url }).catch(() => {}); }}>{hosting.url}</a>
+            <span className="hosting-banner-lead">· code</span>
+            <span className="hosting-banner-pin">{hosting.pin}</span>
+            <span className={`hosting-banner-mode ${hosting.read_only ? "ro" : "rw"}`}>{hosting.read_only ? "view-only" : "interactive"}</span>
+          </span>
+          <button className="hosting-banner-btn" onClick={() => navigator.clipboard.writeText(`${hosting.url}  (code: ${hosting.pin})`).catch(() => {})} onMouseEnter={(e) => showTt("Copy link + code", e.currentTarget)} onMouseLeave={hideTt} aria-label="Copy link and code"><Copy size={12} /></button>
+          <button className="hosting-banner-btn" onClick={() => { stopHosting(); hideTt(); }} onMouseEnter={(e) => showTt("Stop hosting", e.currentTarget)} onMouseLeave={hideTt} aria-label="Stop hosting"><XIcon size={12} /></button>
+        </div>
+      )}
       <div className="terminal-body">
         <div className="terminal-container" ref={containerRef} style={{ background: paletteFor(theme, terminalBgColor).background }}>
           {isInitializing && (
@@ -886,11 +962,23 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
               <span>{isClaudeSession ? `Starting ${AGENTS[tab.agent || "claude"].label}…` : "Starting shell…"}</span>
             </div>
           )}
+          {hosting?.browser_owns && (
+            <div className="terminal-host-overlay">
+              <Smartphone size={26} />
+              <div className="terminal-host-overlay-title">Controlled from the browser</div>
+              <div className="terminal-host-overlay-sub">This terminal is sized for the web viewer. Take control back to use it here.</div>
+              <button className="terminal-host-overlay-btn" onClick={() => setHostingSizeOwner(false)}>Take back control</button>
+            </div>
+          )}
         </div>
-        {isClaudeSession && showGitPanel && gitStatus?.is_repo && (
+        {isClaudeSession && (showHostPanel || (showGitPanel && gitStatus?.is_repo)) && (
           <>
             <div className="terminal-splitter" onPointerDown={onSplitterDown} onMouseEnter={(e) => showTt("Drag to resize", e.currentTarget)} onMouseLeave={hideTt} />
             <div className="terminal-side-panel" style={{ width: gitPanelWidth }}>
+              {showHostPanel ? (
+                <HostPanel hosting={hosting} onStart={startHosting} onStop={stopHosting} onSetReadOnly={setHostingReadOnly} onSetSizeOwner={setHostingSizeOwner} />
+              ) : gitStatus ? (
+              <>
               <div className="git-panel-header">
                 <GitBranch size={12} />
                 <button
@@ -921,6 +1009,8 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
                 {untrackedFiles.length > 0 && <GitSection label="Untracked" files={untrackedFiles} column="untracked" filenamesOnly={gitPanelFilenamesOnly} highlightedPaths={recentlyChangedPaths} onStage={handleStageFile} onUnstage={handleUnstageFile} showTt={showTt} hideTt={hideTt} />}
                 <GitHistorySection open={gitHistoryOpen} commits={gitCommits} onToggle={() => setGitHistoryOpen(v => !v)} showTt={showTt} hideTt={hideTt} />
               </div>
+              </>
+              ) : null}
             </div>
           </>
         )}
@@ -937,7 +1027,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
                 <button
                   className={`terminal-activity-btn ${showGitPanel ? "active" : ""}`}
                   disabled={gitDisabled}
-                  onClick={() => { if (gitDisabled) return; setShowGitPanel(v => !v); if (!showGitPanel) fetchGitStatus(); hideTt(); }}
+                  onClick={() => { if (gitDisabled) return; const opening = activeSidePanel !== "git"; setActiveSidePanel(opening ? "git" : null); if (opening) fetchGitStatus(); hideTt(); }}
                   onMouseEnter={(e) => showTt(tip, e.currentTarget)}
                   onMouseLeave={hideTt}
                   aria-label="Toggle git panel"
@@ -947,6 +1037,16 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
                 </button>
               );
             })()}
+            <button
+              className={`terminal-activity-btn ${hosting || showHostPanel ? "active" : ""}`}
+              onClick={() => { setActiveSidePanel(p => p === "host" ? null : "host"); hideTt(); }}
+              onMouseEnter={(e) => showTt(hosting ? "Web hosting — live" : "Host this terminal on the web", e.currentTarget)}
+              onMouseLeave={hideTt}
+              aria-label="Web hosting"
+            >
+              <Globe size={15} />
+              {hosting && <span className="terminal-activity-badge host-live">●</span>}
+            </button>
           </div>
         )}
       </div>

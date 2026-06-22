@@ -792,6 +792,69 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .branch-banner-btn-primary:hover { background: var(--accent-terracotta); border-color: var(--accent-terracotta); filter: brightness(1.1); }
 @keyframes branchBannerIn { from { transform: translateY(-6px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
+/* ── Web-hosting banner (playground) ──────────────────────────────────
+   Mirrors the branch-banner chrome but uses the green accent so an active
+   broadcast reads as a distinct, persistent state (no auto-dismiss). */
+.hosting-banner { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: linear-gradient(to right, rgba(74, 153, 104, 0.18), rgba(74, 153, 104, 0.07)); border-bottom: 1px solid rgba(74, 153, 104, 0.32); font-size: 11.5px; color: var(--text-primary); animation: branchBannerIn 0.22s cubic-bezier(.4, 0, .2, 1); }
+.hosting-banner-icon { color: #4a9968; flex-shrink: 0; }
+.hosting-banner-text { flex: 1; display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; }
+.hosting-banner-lead { color: var(--text-secondary); flex-shrink: 0; }
+.hosting-banner-url { font-family: var(--font-mono); color: var(--text-primary); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hosting-banner-url:hover { text-decoration: underline; }
+.hosting-banner-pin { font-family: var(--font-mono); font-weight: 700; letter-spacing: .18em; color: #4a9968; flex-shrink: 0; }
+.hosting-banner-btn { background: transparent; border: 1px solid var(--border-default); color: var(--text-secondary); padding: 4px 8px; border-radius: var(--radius-sm); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: background 0.12s, color 0.12s, border-color 0.12s; }
+.hosting-banner-btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-strong); }
+.hosting-banner-mode { flex-shrink: 0; font-size: 9.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; }
+.hosting-banner-mode.rw { color: #6cc088; background: rgba(74, 153, 104, 0.16); border: 1px solid rgba(74, 153, 104, 0.4); }
+.hosting-banner-mode.ro { color: #9cd2ff; background: rgba(90, 176, 240, 0.16); border: 1px solid rgba(90, 176, 240, 0.4); }
+.terminal-activity-badge.host-live { background: #4a9968; font-size: 8px; box-shadow: 0 0 0 2px var(--bg-surface), 0 0 6px rgba(74, 153, 104, 0.7); }
+
+/* ── Web-hosting side panel ───────────────────────────────────────────
+   Lives in the terminal's right rail alongside the git panel; shares the
+   .terminal-side-panel chrome. Room here for future hosting options. */
+.host-side { display: flex; flex-direction: column; height: 100%; }
+.host-side-header { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); flex-shrink: 0; }
+.host-side-header svg { color: #4a9968; }
+.host-side-title { font-weight: 600; }
+.host-live-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 600; color: #6cc088; }
+.host-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #4a9968; box-shadow: 0 0 6px rgba(74, 153, 104, 0.8); animation: hostPulse 1.8s ease-in-out infinite; }
+@keyframes hostPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.host-side-scroll { flex: 1; overflow-y: auto; }
+.host-sec { padding: 12px 10px; display: flex; flex-direction: column; gap: 13px; }
+.host-hint { margin: 0; font-size: 11px; line-height: 1.5; color: var(--text-tertiary); }
+.host-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.host-row-label { font-size: 11.5px; color: var(--text-secondary); }
+.host-block { display: flex; flex-direction: column; gap: 6px; }
+.host-sub { font-size: 10px; line-height: 1.45; color: var(--text-muted); }
+.host-field { display: flex; align-items: center; gap: 6px; background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 5px 8px; }
+.host-field-val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.host-link { color: var(--text-primary); text-decoration: none; cursor: pointer; }
+.host-link:hover { text-decoration: underline; }
+.host-code { flex: 1; font-family: var(--font-mono); font-size: 20px; font-weight: 700; letter-spacing: .26em; color: #4a9968; }
+.host-copy { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 3px; border-radius: var(--radius-sm); display: inline-flex; flex-shrink: 0; }
+.host-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
+.host-switch { position: relative; width: 34px; height: 19px; border-radius: 999px; border: none; background: var(--bg-elevated); box-shadow: inset 0 0 0 1px var(--border-default); cursor: pointer; transition: background 0.15s; flex-shrink: 0; padding: 0; }
+.host-switch.on { background: #4a9968; box-shadow: none; }
+.host-switch-knob { position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: #fff; transition: transform 0.15s; }
+.host-switch.on .host-switch-knob { transform: translateX(15px); }
+.host-seg { display: flex; gap: 4px; background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 3px; }
+.host-seg-btn { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 5px 8px; border: none; background: transparent; color: var(--text-tertiary); font-size: 11px; font-weight: 500; border-radius: var(--radius-sm); cursor: pointer; transition: background 0.12s, color 0.12s; }
+.host-seg-btn:hover:not(.on) { color: var(--text-secondary); }
+.host-seg-btn.on { background: var(--bg-active); color: var(--text-primary); }
+.host-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border-radius: var(--radius-md); font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: filter 0.12s, background 0.12s; }
+.host-action-go { background: #4a9968; color: #fff; }
+.host-action-go:hover { filter: brightness(1.08); }
+.host-action-stop { background: transparent; border-color: rgba(181, 51, 51, 0.5); color: #d97757; }
+.host-action-stop:hover { background: rgba(181, 51, 51, 0.12); }
+
+/* "Controlled from the browser" overlay — shown over the terminal when a viewer owns the grid. */
+.terminal-host-overlay { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; padding: 24px; background: rgba(20, 20, 19, 0.86); backdrop-filter: blur(2px); color: var(--text-secondary); }
+.terminal-host-overlay svg { color: #5ab0f0; }
+.terminal-host-overlay-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.terminal-host-overlay-sub { font-size: 11px; line-height: 1.5; max-width: 280px; color: var(--text-tertiary); }
+.terminal-host-overlay-btn { margin-top: 4px; padding: 7px 16px; border-radius: var(--radius-md); border: 1px solid var(--border-default); background: var(--bg-elevated); color: var(--text-primary); font-size: 12px; font-weight: 600; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.terminal-host-overlay-btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+
 /* ── Settings modal ───────────────────────────────────────────────── */
 .settings-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 3000; display: flex; align-items: center; justify-content: center; animation: fadeIn 0.14s ease; }
 .settings-panel { width: 480px; max-width: 92vw; max-height: 82vh; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: 0 20px 48px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; overflow: hidden; animation: scaleIn 0.16s cubic-bezier(.4, 0, .2, 1); }

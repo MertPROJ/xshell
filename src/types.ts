@@ -117,6 +117,17 @@ export interface MessagePreview {
   text: string;
 }
 
+// Web-hosting state for a terminal (see lib.rs: start_hosting / hosting_status). url = the LAN
+// link a browser opens; pin = the 4-digit gate; read_only = viewers can't type; browser_owns =
+// the browser drives the grid size (the app yields) vs. the app owning it (viewers letterbox).
+export interface HostInfo {
+  url: string;
+  pin: string;
+  port: number;
+  read_only: boolean;
+  browser_owns: boolean;
+}
+
 export interface GitFile {
   path: string;
   staged: string;
