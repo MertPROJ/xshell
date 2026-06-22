@@ -686,7 +686,10 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .terminal-activity-btn.active { background: var(--bg-active); color: var(--accent-terracotta); }
 .terminal-activity-btn:disabled { opacity: 0.35; cursor: default; }
 .terminal-activity-badge { position: absolute; top: 1px; right: 1px; min-width: 14px; height: 14px; padding: 0 3px; background: var(--accent-terracotta); color: #fff; font-size: 9px; font-weight: 700; line-height: 1; border-radius: 7px; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--bg-surface); pointer-events: none; }
-.git-panel-header { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); flex-shrink: 0; }
+/* min-height keeps the git and file-explorer headers the same height so their bottom dividers
+   line up. The git header is the taller of the two (its branch dropdown button adds padding +
+   border); this pins both to that height regardless of which controls each one carries. */
+.git-panel-header { display: flex; align-items: center; gap: 6px; min-height: 39px; padding: 8px 10px; border-bottom: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); flex-shrink: 0; }
 .git-panel-branch-btn { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); color: var(--text-primary); font-family: var(--font-mono); font-size: 11px; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
 .git-panel-branch-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-subtle); }
 .git-panel-branch-btn.open { background: var(--bg-active); border-color: var(--border-strong); }
@@ -751,6 +754,53 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .gs-R { color: #9a6dd7; }         /* renamed — purple */
 .gs-C { color: #42a4c9; }         /* copied — cyan */
 .gs-U { color: var(--text-muted); } /* untracked — muted */
+
+/* ── File explorer panel ──────────────────────────────────────────── */
+/* Shares the side-panel chrome with the git panel (header, splitter). The tree is a flat list
+   of indented rows — folders carry a rotating chevron, every row a Material Icon Theme SVG.
+   Click reveals a file in the OS file manager / toggles a folder; drag writes the path into
+   the terminal; right-click opens the context menu. The header shows the current dir name and
+   can climb to the parent; the search box runs a recursive name search rooted at it. */
+.file-panel-header .file-panel-folder { color: var(--text-muted); flex-shrink: 0; }
+.file-panel-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; letter-spacing: 0.3px; cursor: default; }
+.git-panel-refresh.active { background: var(--bg-active); color: var(--accent-terracotta); }
+.git-panel-refresh:disabled { opacity: 0.35; cursor: default; }
+.git-panel-refresh:disabled:hover { background: transparent; color: var(--text-muted); }
+
+.file-search-bar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); flex-shrink: 0; }
+.file-search-icon { color: var(--text-muted); flex-shrink: 0; }
+.file-search-input { flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: var(--text-primary); font-size: 11px; font-family: var(--font-mono); }
+.file-search-input::placeholder { color: var(--text-muted); }
+.file-search-clear { background: transparent; border: none; padding: 2px; color: var(--text-muted); cursor: pointer; display: inline-flex; align-items: center; border-radius: var(--radius-sm); flex-shrink: 0; }
+.file-search-clear:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.file-tree-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 4px 0; }
+.file-row { display: flex; align-items: center; gap: 5px; padding: 2px 10px 2px 0; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; user-select: none; transition: background 0.08s; }
+.file-row:hover, .file-row-active { background: var(--bg-hover); color: var(--text-primary); }
+.file-row-muted { color: var(--text-muted); cursor: default; font-style: italic; }
+.file-row-muted:hover { background: transparent; color: var(--text-muted); }
+.file-chev { flex-shrink: 0; width: 14px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-muted); }
+.file-chev svg { transition: transform 0.15s ease; }
+.file-chev svg.open { transform: rotate(90deg); }
+.file-icon { flex-shrink: 0; width: 16px; height: 16px; display: block; pointer-events: none; }
+.file-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.file-row-sub { margin-left: 6px; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); font-size: 10px; }
+
+/* Smooth expand/collapse: the children stay mounted and the wrapper animates between a
+   collapsed (0fr) and natural (1fr) grid row. `min-height: 0` lets the inner content be
+   clipped to zero mid-transition. */
+.file-children { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.18s ease; }
+.file-children.open { grid-template-rows: 1fr; }
+.file-children-inner { overflow: hidden; min-height: 0; }
+
+/* Right-click context menu. The full-viewport backdrop captures the next click to dismiss;
+   the menu is fixed-positioned at the cursor (clamped to stay on-screen). */
+.file-ctx-backdrop { position: fixed; inset: 0; z-index: 2000; }
+.file-ctx-menu { position: fixed; z-index: 2001; min-width: 200px; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: 0 8px 24px rgba(0,0,0,0.4); padding: 4px; display: flex; flex-direction: column; gap: 1px; animation: fadeIn 0.1s ease; }
+.file-ctx-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: transparent; border: none; border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 12px; text-align: left; cursor: pointer; transition: background 0.1s, color 0.1s; }
+.file-ctx-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.file-ctx-item svg { flex-shrink: 0; color: var(--text-muted); }
+.file-ctx-item:hover svg { color: var(--accent-terracotta); }
 
 /* Change-blink: fires when a file first appears in status or its state changes.
    The keyframes reach peak tint quickly, then fade out so later rows settle calmly. */

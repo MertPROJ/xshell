@@ -22,6 +22,8 @@ interface SettingsViewProps {
   onSetGitLazyPolling: (enabled: boolean) => void;
   gitPanelFilenamesOnly: boolean;
   onSetGitPanelFilenamesOnly: (enabled: boolean) => void;
+  fileExplorerOnStart: boolean;
+  onSetFileExplorerOnStart: (enabled: boolean) => void;
   contextTreeEnabled: boolean;
   onSetContextTreeEnabled: (enabled: boolean) => void;
   terminalBgColor: string;
@@ -163,7 +165,7 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgent, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, webglRendering, onSetWebglRendering, terminalFontWeight, onSetTerminalFontWeight, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showSessionRowMetricsCodex, onSetShowSessionRowMetricsCodex, showRateLimitInSidebarCodex, onSetShowRateLimitInSidebarCodex, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgent, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, fileExplorerOnStart, onSetFileExplorerOnStart, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, webglRendering, onSetWebglRendering, terminalFontWeight, onSetTerminalFontWeight, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showSessionRowMetricsCodex, onSetShowSessionRowMetricsCodex, showRateLimitInSidebarCodex, onSetShowRateLimitInSidebarCodex, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
@@ -397,6 +399,9 @@ export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgen
                 </SettingRow>
                 <SettingRow title="Filenames only" description="In the git panel, show just the file name (basename) instead of the full relative path. Hover a row to see the full path.">
                   <Toggle checked={gitPanelFilenamesOnly} onChange={onSetGitPanelFilenamesOnly} />
+                </SettingRow>
+                <SettingRow title="Open file explorer on start" description="When on (default), the file-explorer panel opens automatically as each new agent terminal is opened. Applies to newly opened tabs; you can still toggle the panel anytime from the sidebar.">
+                  <Toggle checked={fileExplorerOnStart} onChange={onSetFileExplorerOnStart} />
                 </SettingRow>
               </Section>
             </>

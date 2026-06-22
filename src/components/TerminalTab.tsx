@@ -6,7 +6,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { GitBranch, ArrowUp, ArrowDown, RefreshCw, ChevronRight, ChevronDown, Plus, Minus, History, GitFork, Pencil, X as XIcon, Check, Search, AlertTriangle, Cloud } from "lucide-react";
+import { GitBranch, ArrowUp, ArrowDown, RefreshCw, ChevronRight, ChevronDown, Plus, Minus, History, GitFork, Pencil, X as XIcon, Check, Search, AlertTriangle, Cloud, FolderTree } from "lucide-react";
+import { FileExplorerPanel, DRAG_PATH_MIME } from "./FileExplorerPanel";
 import "@xterm/xterm/css/xterm.css";
 import { detectMonoFontFamily, ensureMonoFontsLoaded } from "../lib/fonts";
 import type { Tab, GitStatus, GitFile, GitCommit, BranchInfo, SessionInfo, GitBranch as GitBranchEntry } from "../types";
@@ -114,6 +115,7 @@ interface TerminalTabProps {
   isActive: boolean;
   gitLazyPolling: boolean;
   gitPanelFilenamesOnly: boolean;
+  fileExplorerOnStart: boolean;
   terminalBgColor: string;
   defaultFontSize: number;
   defaultShellId: string;
@@ -179,7 +181,7 @@ const MIN_PANEL = 200;
 const MAX_PANEL = 600;
 const DEFAULT_PANEL = 280;
 
-export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, forceSyncOutput, webglRendering, terminalFontWeight, eagerInit, theme, projectEncodedName, showTerminalHeaderStats, onBranchSwitch }: TerminalTabProps) {
+export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOnly, fileExplorerOnStart, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, forceSyncOutput, webglRendering, terminalFontWeight, eagerInit, theme, projectEncodedName, showTerminalHeaderStats, onBranchSwitch }: TerminalTabProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -193,6 +195,18 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
   const sawFirstOutputRef = useRef(false);
 
   const [showGitPanel, setShowGitPanel] = useState(false);
+  // The git and file-explorer panels share one slot on the right — only one is open at a
+  // time (VS Code-style). Width is shared too, so resizing one carries over to the other.
+  // Initial open is driven by the "open file explorer on start" setting, but only for agent
+  // tabs (the panel/activity-bar are claude-only). Reading the setting at mount means it
+  // governs newly opened terminals without retroactively opening it on existing ones.
+  const openExplorerByDefault = fileExplorerOnStart && (tab.shellMode || "claude") === "claude";
+  const [showFilePanel, setShowFilePanel] = useState(openExplorerByDefault);
+  // Once the file explorer is opened we keep it mounted (just hidden) for the life of the tab,
+  // so its browsed path + expansion state survive toggling the panel and switching tabs —
+  // resetting only when the tab is closed or the app restarts. Lazy: nothing mounts until the
+  // user opens it the first time (or it opens on start), so tabs that never use it pay nothing.
+  const [fileExplorerMounted, setFileExplorerMounted] = useState(openExplorerByDefault);
   const [gitPanelWidth, setGitPanelWidth] = useState(DEFAULT_PANEL);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [gitCommits, setGitCommits] = useState<GitCommit[]>([]);
@@ -524,11 +538,11 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     }
   }, [webglRendering]);
 
-  // Refit terminal whenever the git panel opens/closes or resizes
+  // Refit terminal whenever either side panel opens/closes or the shared width changes
   useEffect(() => {
     if (!fitAddonRef.current) return;
     requestAnimationFrame(() => fitAddonRef.current?.fit());
-  }, [showGitPanel, gitPanelWidth]);
+  }, [showGitPanel, showFilePanel, gitPanelWidth]);
 
   // Live-update the full xterm palette whenever the app theme or the user's bg-override
   // changes. Using `paletteFor` keeps the brand-relative colors (cursor, ANSI) consistent
@@ -879,7 +893,20 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
         </div>
       )}
       <div className="terminal-body">
-        <div className="terminal-container" ref={containerRef} style={{ background: paletteFor(theme, terminalBgColor).background }}>
+        <div
+          className="terminal-container"
+          ref={containerRef}
+          style={{ background: paletteFor(theme, terminalBgColor).background }}
+          onDragOver={(e) => { if (e.dataTransfer.types.includes(DRAG_PATH_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
+          onDrop={(e) => {
+            const p = e.dataTransfer.getData(DRAG_PATH_MIME) || e.dataTransfer.getData("text/plain");
+            if (!p) return;
+            e.preventDefault();
+            // Quote paths with spaces (common on Windows); trailing space lets the user keep typing.
+            invoke("write_terminal", { id: tab.id, data: /\s/.test(p) ? `"${p}" ` : `${p} ` }).catch(() => {});
+            terminalRef.current?.focus();
+          }}
+        >
           {isInitializing && (
             <div className="terminal-loading-overlay">
               <div className="spinner" />
@@ -924,10 +951,20 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
             </div>
           </>
         )}
-        {/* Activity bar — claude-only, persistent. Currently hosts the git toggle; future
-            slots (file explorer, search, etc) will land here too. Disabled-but-visible when
-            the panel feature is off or the cwd isn't a git repo, so the bar's column doesn't
-            jump in/out as the user switches tabs. */}
+        {isClaudeSession && tab.projectPath && fileExplorerMounted && (
+          // Kept mounted once opened (toggled with `display`, not unmounted) so the explorer's
+          // path + expansion state persist across panel toggles and tab switches.
+          <>
+            <div className="terminal-splitter" style={{ display: showFilePanel ? undefined : "none" }} onPointerDown={onSplitterDown} onMouseEnter={(e) => showTt("Drag to resize", e.currentTarget)} onMouseLeave={hideTt} />
+            <div className="terminal-side-panel" style={{ width: gitPanelWidth, display: showFilePanel ? undefined : "none" }}>
+              <FileExplorerPanel rootPath={tab.projectPath} terminalId={tab.id} showTt={showTt} hideTt={hideTt} />
+            </div>
+          </>
+        )}
+        {/* Activity bar — claude-only, persistent. Hosts the git + file-explorer toggles; the
+            two panels share one slot (opening one closes the other). The git button is
+            disabled-but-visible when the cwd isn't a repo, so the bar's column doesn't jump
+            in/out as the user switches tabs. */}
         {isClaudeSession && (
           <div className="terminal-activity-bar">
             {(() => {
@@ -937,7 +974,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
                 <button
                   className={`terminal-activity-btn ${showGitPanel ? "active" : ""}`}
                   disabled={gitDisabled}
-                  onClick={() => { if (gitDisabled) return; setShowGitPanel(v => !v); if (!showGitPanel) fetchGitStatus(); hideTt(); }}
+                  onClick={() => { if (gitDisabled) return; setShowFilePanel(false); setShowGitPanel(v => !v); if (!showGitPanel) fetchGitStatus(); hideTt(); }}
                   onMouseEnter={(e) => showTt(tip, e.currentTarget)}
                   onMouseLeave={hideTt}
                   aria-label="Toggle git panel"
@@ -947,6 +984,16 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
                 </button>
               );
             })()}
+            <button
+              className={`terminal-activity-btn ${showFilePanel ? "active" : ""}`}
+              disabled={!tab.projectPath}
+              onClick={() => { if (!tab.projectPath) return; setShowGitPanel(false); setFileExplorerMounted(true); setShowFilePanel(v => !v); hideTt(); }}
+              onMouseEnter={(e) => showTt(`${showFilePanel ? "Hide" : "Show"} file explorer`, e.currentTarget)}
+              onMouseLeave={hideTt}
+              aria-label="Toggle file explorer"
+            >
+              <FolderTree size={15} />
+            </button>
           </div>
         )}
       </div>

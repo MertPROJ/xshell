@@ -1370,6 +1370,71 @@ fn reveal_in_explorer(path: String) -> Result<(), String> {
     Ok(())
 }
 
+// ── File explorer ─────────────────────────────────────────────────────
+//
+// Single-level directory listing for the terminal's file-explorer panel. Lazy by design:
+// the frontend calls this once per folder as the user expands it (mirroring the git panel's
+// lazy-polling philosophy) rather than walking the whole tree up front. Returns folders
+// first then files, each case-insensitively alphabetical — the order VS Code's explorer uses.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DirItem {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+#[tauri::command]
+fn list_dir(path: String) -> Result<Vec<DirItem>, String> {
+    let rd = fs::read_dir(&path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
+    let mut items: Vec<DirItem> = Vec::new();
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // file_type() avoids a stat syscall on most platforms; for symlinks we follow to
+        // decide tree-vs-leaf so a symlinked dir still gets an expand chevron.
+        let is_dir = match entry.file_type() {
+            Ok(ft) if ft.is_symlink() => entry.path().is_dir(),
+            Ok(ft) => ft.is_dir(),
+            Err(_) => false,
+        };
+        items.push(DirItem { name, path: entry.path().to_string_lossy().into_owned(), is_dir });
+    }
+    items.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    Ok(items)
+}
+
+// Recursive name search under `root` for the file-explorer's search box. Case-insensitive
+// substring match on the entry name. Bounded on both axes — at most `limit` matches and a
+// hard ceiling on entries visited — so searching a deep tree (or one with node_modules)
+// stays responsive rather than walking millions of paths. Symlinked dirs aren't followed,
+// which both avoids cycles and keeps the walk bounded.
+#[tauri::command]
+fn search_dir(root: String, query: String, limit: Option<usize>) -> Vec<DirItem> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() { return vec![]; }
+    let cap = limit.unwrap_or(300).min(2000);
+    const MAX_VISIT: usize = 200_000;
+    let mut out: Vec<DirItem> = Vec::new();
+    let mut stack: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from(&root)];
+    let mut visited = 0usize;
+    while let Some(dir) = stack.pop() {
+        if out.len() >= cap || visited >= MAX_VISIT { break; }
+        let rd = match fs::read_dir(&dir) { Ok(rd) => rd, Err(_) => continue };
+        for entry in rd.flatten() {
+            visited += 1;
+            if visited >= MAX_VISIT { break; }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // Don't follow symlinks: treat them as leaves so the walk can't loop or escape.
+            let is_dir = matches!(entry.file_type(), Ok(ft) if ft.is_dir() && !ft.is_symlink());
+            if out.len() < cap && name.to_lowercase().contains(&q) {
+                out.push(DirItem { name, path: entry.path().to_string_lossy().into_owned(), is_dir });
+            }
+            if is_dir { stack.push(entry.path()); }
+        }
+    }
+    out.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    out
+}
+
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     use std::process::Command;
@@ -2582,7 +2647,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState { terminals: Mutex::new(HashMap::new()) })
-        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, list_cursor_projects, get_codex_context, get_cursor_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal])
+        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, list_dir, search_dir, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, list_cursor_projects, get_codex_context, get_cursor_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

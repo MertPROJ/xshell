@@ -22,7 +22,9 @@
     "@xterm/xterm": "^5.5.0",
     "lucide-react": "^0.500.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "vite-plugin-static-copy": "^4.1.1",
+    "vscode-material-icons": "^0.1.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
