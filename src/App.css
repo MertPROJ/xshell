@@ -767,12 +767,21 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .git-panel-refresh:disabled { opacity: 0.35; cursor: default; }
 .git-panel-refresh:disabled:hover { background: transparent; color: var(--text-muted); }
 
-.file-search-bar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); flex-shrink: 0; }
+/* Search box slides open/closed via the grid-rows trick (0fr↔1fr) with a fade, so it animates
+   in both directions instead of popping in/out. */
+.file-search-wrap { flex-shrink: 0; display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.18s ease; }
+.file-search-wrap.open { grid-template-rows: 1fr; }
+.file-search-inner { overflow: hidden; min-height: 0; opacity: 0; transition: opacity 0.18s ease; }
+.file-search-wrap.open .file-search-inner { opacity: 1; }
+.file-search-bar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); }
 .file-search-icon { color: var(--text-muted); flex-shrink: 0; }
 .file-search-input { flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: var(--text-primary); font-size: 11px; font-family: var(--font-mono); }
 .file-search-input::placeholder { color: var(--text-muted); }
 .file-search-clear { background: transparent; border: none; padding: 2px; color: var(--text-muted); cursor: pointer; display: inline-flex; align-items: center; border-radius: var(--radius-sm); flex-shrink: 0; }
 .file-search-clear:hover { background: var(--bg-hover); color: var(--text-primary); }
+/* Small orange spinner — in the search bar while a query is in flight, and beside "Searching…". */
+.file-searching { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px; font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+.file-search-spinner { flex-shrink: 0; width: 12px; height: 12px; border: 1.5px solid var(--border-default); border-top-color: var(--accent-terracotta); border-radius: 50%; animation: spin 0.7s linear infinite; }
 
 .file-tree-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 4px 0; }
 .file-row { display: flex; align-items: center; gap: 5px; padding: 2px 10px 2px 0; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; user-select: none; transition: background 0.08s; }

@@ -240,16 +240,21 @@ export function FileExplorerPanel({ rootPath, terminalId, showTt, hideTt }: Pane
         <button className={`git-panel-refresh ${searchOpen ? "active" : ""}`} onClick={() => { setSearchOpen((v) => !v); if (searchOpen) setQuery(""); }} onMouseEnter={(e) => showTt("Search", e.currentTarget)} onMouseLeave={hideTt}><Search size={12} /></button>
         <button className={`git-panel-refresh ${refreshing ? "spinning" : ""}`} onClick={load} onMouseEnter={(e) => showTt("Refresh", e.currentTarget)} onMouseLeave={hideTt}><RefreshCw size={11} /></button>
       </div>
-      {searchOpen && (
-        <div className="file-search-bar">
-          <Search size={12} className="file-search-icon" />
-          <input ref={searchInputRef} className="file-search-input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search this folder…" spellCheck={false} />
-          {query && <button className="file-search-clear" onClick={() => { setQuery(""); searchInputRef.current?.focus(); }} aria-label="Clear"><XIcon size={12} /></button>}
+      {/* Always mounted; the grid-rows trick animates it open/closed smoothly (same approach
+          as the folder expand/collapse). Input is taken out of the tab order while collapsed. */}
+      <div className={`file-search-wrap ${searchOpen ? "open" : ""}`}>
+        <div className="file-search-inner">
+          <div className="file-search-bar">
+            <Search size={12} className="file-search-icon" />
+            <input ref={searchInputRef} className="file-search-input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search this folder…" spellCheck={false} tabIndex={searchOpen ? 0 : -1} />
+            {searching && <span className="file-search-spinner" />}
+            {query && <button className="file-search-clear" onClick={() => { setQuery(""); searchInputRef.current?.focus(); }} aria-label="Clear"><XIcon size={12} /></button>}
+          </div>
         </div>
-      )}
+      </div>
       <div className="file-tree-scroll">
         {showingSearch ? (
-          searching && results === null ? <div className="git-panel-empty">Searching…</div>
+          searching && results === null ? <div className="file-searching"><span className="file-search-spinner" /><span>Searching…</span></div>
           : results && results.length === 0 ? <div className="git-panel-empty">No matches</div>
           : (results || []).map((item) => {
               const sub = relDir(item.path, cwd, item.name);

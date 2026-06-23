@@ -1407,8 +1407,11 @@ fn list_dir(path: String) -> Result<Vec<DirItem>, String> {
 // hard ceiling on entries visited — so searching a deep tree (or one with node_modules)
 // stays responsive rather than walking millions of paths. Symlinked dirs aren't followed,
 // which both avoids cycles and keeps the walk bounded.
+//
+// `async` so Tauri runs it on the async runtime rather than the main thread — a big tree can
+// take a moment to walk, and doing it on the main thread would freeze the UI until it returns.
 #[tauri::command]
-fn search_dir(root: String, query: String, limit: Option<usize>) -> Vec<DirItem> {
+async fn search_dir(root: String, query: String, limit: Option<usize>) -> Vec<DirItem> {
     let q = query.trim().to_lowercase();
     if q.is_empty() { return vec![]; }
     let cap = limit.unwrap_or(300).min(2000);
