@@ -92,7 +92,10 @@ export default function App() {
   // every 3s while the tab is active. Default lazy: most users only need fresh git data
   // when they're actually looking at it.
   const [gitLazyPolling, setGitLazyPolling] = useState(true);
-  const [gitPanelFilenamesOnly, setGitPanelFilenamesOnly] = useState(false);
+  // Show git changes as a folder tree (default). Off = flat list with a dimmed path per file.
+  const [gitChangesTree, setGitChangesTree] = useState(true);
+  // When on (default), a newly opened agent terminal shows the file-explorer panel immediately.
+  const [fileExplorerOnStart, setFileExplorerOnStart] = useState(true);
   const [contextTreeEnabled, setContextTreeEnabled] = useState(true);
   // Both default to true: setting up the statusline hook is the meaningful gesture, the
   // toggles let the user hide either feature even with stats available.
@@ -178,13 +181,26 @@ export default function App() {
   useEffect(() => { tabsRef.current = tabs; }, [tabs]);
   useEffect(() => { activeTabIdRef.current = activeTabId; }, [activeTabId]);
 
+  // Suppress the WebView's native right-click menu (Back / Reload / Save / Print) app-wide —
+  // it's never useful in a desktop app and collides with our own context menus. Still allowed
+  // on text fields so the OS cut/copy/paste menu works there.
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && t.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) return;
+      e.preventDefault();
+    };
+    document.addEventListener("contextmenu", onContextMenu);
+    return () => document.removeEventListener("contextmenu", onContextMenu);
+  }, []);
+
   // ── Initial load ──────────────────────────────────────────────────
   const [tabsRestored, setTabsRestored] = useState(false);
   useEffect(() => {
     (async () => {
       try {
         const store = await load("settings.json", { defaults: {}, autoSave: true });
-        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitNamesOnly, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender, termHeaderStats, projectStatsChart, statsView, syncOut, eagerInit, webgl, fontWeight, defAgent, rowMetricsCodex, rlSidebarCodex] = await Promise.all([
+        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitTree, fileExpOnStart, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender, termHeaderStats, projectStatsChart, statsView, syncOut, eagerInit, webgl, fontWeight, defAgent, rowMetricsCodex, rlSidebarCodex] = await Promise.all([
           store.get<string[]>("project_paths"),
           store.get<Record<string, ProjectSettings>>("project_icons"),
           store.get<Tab[]>("open_tabs"),
@@ -195,7 +211,8 @@ export default function App() {
           store.get<string>("default_shell"),
           store.get<boolean>("context_tree_enabled"),
           store.get<number>("default_terminal_font_size"),
-          store.get<boolean>("git_panel_filenames_only"),
+          store.get<boolean>("git_changes_tree"),
+          store.get<boolean>("file_explorer_on_start"),
           store.get<SidebarItem[]>("sidebar_layout"),
           store.get<boolean>("rate_limit_in_sidebar"),
           store.get<boolean>("session_row_metrics"),
@@ -234,7 +251,8 @@ export default function App() {
         if (typeof defFont === "number" && defFont >= 8 && defFont <= 32) setDefaultTerminalFontSize(defFont);
         if (typeof rlSidebar === "boolean") setShowRateLimitInSidebar(rlSidebar);
         if (typeof rowMetrics === "boolean") setShowSessionRowMetrics(rowMetrics);
-        if (typeof gitNamesOnly === "boolean") setGitPanelFilenamesOnly(gitNamesOnly);
+        if (typeof gitTree === "boolean") setGitChangesTree(gitTree);
+        if (typeof fileExpOnStart === "boolean") setFileExplorerOnStart(fileExpOnStart);
         if (typeof fsRender === "boolean") setFullscreenRendering(fsRender);
         if (typeof syncOut === "boolean") setForceSyncOutput(syncOut);
         if (typeof eagerInit === "boolean") setEagerInitTabs(eagerInit);
@@ -426,9 +444,14 @@ export default function App() {
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("git_lazy_polling", enabled); } catch (_) {}
   }, []);
 
-  const persistGitPanelFilenamesOnly = useCallback(async (enabled: boolean) => {
-    setGitPanelFilenamesOnly(enabled);
-    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("git_panel_filenames_only", enabled); } catch (_) {}
+  const persistGitChangesTree = useCallback(async (enabled: boolean) => {
+    setGitChangesTree(enabled);
+    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("git_changes_tree", enabled); } catch (_) {}
+  }, []);
+
+  const persistFileExplorerOnStart = useCallback(async (enabled: boolean) => {
+    setFileExplorerOnStart(enabled);
+    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("file_explorer_on_start", enabled); } catch (_) {}
   }, []);
 
   const persistContextTreeEnabled = useCallback(async (enabled: boolean) => {
@@ -1095,7 +1118,7 @@ export default function App() {
       <div className="main-content">
         {/* Settings view — hidden unless activeTabId === 'settings' */}
         <div style={{ display: showSettings ? "flex" : "none", flex: 1, overflow: "hidden" }}>
-          <SettingsView theme={theme} onSetTheme={persistTheme} defaultAgent={defaultAgent} onSetDefaultAgent={persistDefaultAgent} gitLazyPolling={gitLazyPolling} onSetGitLazyPolling={persistGitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} onSetGitPanelFilenamesOnly={persistGitPanelFilenamesOnly} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} forceSyncOutput={forceSyncOutput} onSetForceSyncOutput={persistForceSyncOutput} webglRendering={webglRendering} onSetWebglRendering={persistWebglRendering} terminalFontWeight={terminalFontWeight} onSetTerminalFontWeight={persistTerminalFontWeight} eagerInitTabs={eagerInitTabs} onSetEagerInitTabs={persistEagerInitTabs} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} showSessionRowMetricsCodex={showSessionRowMetricsCodex} onSetShowSessionRowMetricsCodex={persistShowSessionRowMetricsCodex} showRateLimitInSidebarCodex={showRateLimitInSidebarCodex} onSetShowRateLimitInSidebarCodex={persistShowRateLimitInSidebarCodex} showTerminalHeaderStats={showTerminalHeaderStats} onSetShowTerminalHeaderStats={persistShowTerminalHeaderStats} showProjectStatsChart={showProjectStatsChart} onSetShowProjectStatsChart={persistShowProjectStatsChart} updateInfo={updateInfo} />
+          <SettingsView theme={theme} onSetTheme={persistTheme} defaultAgent={defaultAgent} onSetDefaultAgent={persistDefaultAgent} gitLazyPolling={gitLazyPolling} onSetGitLazyPolling={persistGitLazyPolling} gitChangesTree={gitChangesTree} onSetGitChangesTree={persistGitChangesTree} fileExplorerOnStart={fileExplorerOnStart} onSetFileExplorerOnStart={persistFileExplorerOnStart} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} forceSyncOutput={forceSyncOutput} onSetForceSyncOutput={persistForceSyncOutput} webglRendering={webglRendering} onSetWebglRendering={persistWebglRendering} terminalFontWeight={terminalFontWeight} onSetTerminalFontWeight={persistTerminalFontWeight} eagerInitTabs={eagerInitTabs} onSetEagerInitTabs={persistEagerInitTabs} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} showSessionRowMetricsCodex={showSessionRowMetricsCodex} onSetShowSessionRowMetricsCodex={persistShowSessionRowMetricsCodex} showRateLimitInSidebarCodex={showRateLimitInSidebarCodex} onSetShowRateLimitInSidebarCodex={persistShowRateLimitInSidebarCodex} showTerminalHeaderStats={showTerminalHeaderStats} onSetShowTerminalHeaderStats={persistShowTerminalHeaderStats} showProjectStatsChart={showProjectStatsChart} onSetShowProjectStatsChart={persistShowProjectStatsChart} updateInfo={updateInfo} />
         </div>
         {/* Home view — hidden when a terminal tab is active */}
         <div style={{ display: showHome ? "flex" : "none", flex: 1, overflow: "hidden" }}>
@@ -1178,7 +1201,7 @@ export default function App() {
           // the subtree (which kills the PTY in TerminalTab's cleanup). Keying by tab.id
           // makes a reorder a pure move — the TerminalTab instance, xterm, and PTY survive.
           return createPortal(
-            <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitLazyPolling={gitLazyPolling} gitPanelFilenamesOnly={gitPanelFilenamesOnly} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} fullscreenRendering={fullscreenRendering} forceSyncOutput={forceSyncOutput} webglRendering={webglRendering} terminalFontWeight={terminalFontWeight} eagerInit={eagerInitTabs} theme={theme} projectEncodedName={encodedName} showTerminalHeaderStats={showTerminalHeaderStats} onBranchSwitch={handleSwitchTabToBranch} />,
+            <TerminalTab tab={tab} isActive={tab.id === activeTabId || (!!tab.groupId && tab.groupId === activeTabId && activeLeafByGroup[tab.groupId] === tab.id)} gitLazyPolling={gitLazyPolling} gitChangesTree={gitChangesTree} fileExplorerOnStart={fileExplorerOnStart} terminalBgColor={terminalBgColor} defaultFontSize={defaultTerminalFontSize} defaultShellId={defaultShell} fullscreenRendering={fullscreenRendering} forceSyncOutput={forceSyncOutput} webglRendering={webglRendering} terminalFontWeight={terminalFontWeight} eagerInit={eagerInitTabs} theme={theme} projectEncodedName={encodedName} showTerminalHeaderStats={showTerminalHeaderStats} onBranchSwitch={handleSwitchTabToBranch} />,
             host,
             tab.id,
           );

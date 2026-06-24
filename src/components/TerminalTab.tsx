@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, useCallback, useLayoutEffect } from "react";
+import { useEffect, useRef, useState, useCallback, useLayoutEffect, useMemo } from "react";
+import hljs from "highlight.js/lib/common";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
 import { Terminal } from "@xterm/xterm";
@@ -6,7 +7,9 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { GitBranch, ArrowUp, ArrowDown, RefreshCw, ChevronRight, ChevronDown, Plus, Minus, History, GitFork, Pencil, X as XIcon, Check, Search, AlertTriangle, Cloud } from "lucide-react";
+import { GitBranch, ArrowUp, ArrowDown, RefreshCw, ChevronRight, ChevronDown, Plus, Minus, History, GitFork, Pencil, X as XIcon, Check, Search, AlertTriangle, Cloud, FolderTree, FileDiff, RotateCcw } from "lucide-react";
+import { FileExplorerPanel, DRAG_PATH_MIME } from "./FileExplorerPanel";
+import { fileIconUrl, plainFolderIconUrl } from "../lib/fileIcons";
 import "@xterm/xterm/css/xterm.css";
 import { detectMonoFontFamily, ensureMonoFontsLoaded } from "../lib/fonts";
 import type { Tab, GitStatus, GitFile, GitCommit, BranchInfo, SessionInfo, GitBranch as GitBranchEntry } from "../types";
@@ -113,7 +116,8 @@ interface TerminalTabProps {
   tab: Tab;
   isActive: boolean;
   gitLazyPolling: boolean;
-  gitPanelFilenamesOnly: boolean;
+  gitChangesTree: boolean;
+  fileExplorerOnStart: boolean;
   terminalBgColor: string;
   defaultFontSize: number;
   defaultShellId: string;
@@ -176,10 +180,12 @@ function TerminalTooltip({ text, rect }: { text: string; rect: DOMRect }) {
 }
 
 const MIN_PANEL = 200;
-const MAX_PANEL = 600;
 const DEFAULT_PANEL = 280;
+// Leave room for the activity bar (32) + splitter (4) + a thin terminal sliver (~40) when the
+// panel is dragged to its widest, so it can cover almost the whole terminal but stay grabbable.
+const PANEL_EDGE_RESERVE = 76;
 
-export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOnly, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, forceSyncOutput, webglRendering, terminalFontWeight, eagerInit, theme, projectEncodedName, showTerminalHeaderStats, onBranchSwitch }: TerminalTabProps) {
+export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fileExplorerOnStart, terminalBgColor, defaultFontSize, defaultShellId, fullscreenRendering, forceSyncOutput, webglRendering, terminalFontWeight, eagerInit, theme, projectEncodedName, showTerminalHeaderStats, onBranchSwitch }: TerminalTabProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -193,13 +199,31 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
   const sawFirstOutputRef = useRef(false);
 
   const [showGitPanel, setShowGitPanel] = useState(false);
+  // The git and file-explorer panels share one slot on the right — only one is open at a
+  // time (VS Code-style). Width is shared too, so resizing one carries over to the other.
+  // Initial open is driven only by the "open file explorer on start" setting (claude tabs);
+  // the git panel never auto-opens — it opens when the user clicks its activity-bar button.
+  const openExplorerByDefault = fileExplorerOnStart && (tab.shellMode || "claude") === "claude";
+  const [showFilePanel, setShowFilePanel] = useState(openExplorerByDefault);
+  // Once the file explorer is opened we keep it mounted (just hidden) for the life of the tab,
+  // so its browsed path + expansion state survive toggling the panel and switching tabs —
+  // resetting only when the tab is closed or the app restarts. Lazy: nothing mounts until the
+  // user opens it the first time (or it opens on start), so tabs that never use it pay nothing.
+  const [fileExplorerMounted, setFileExplorerMounted] = useState(openExplorerByDefault);
   const [gitPanelWidth, setGitPanelWidth] = useState(DEFAULT_PANEL);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [gitCommits, setGitCommits] = useState<GitCommit[]>([]);
   const [gitRefreshing, setGitRefreshing] = useState(false);
-  // History expanded by default — most users want to see recent commits the moment they open
-  // the panel. The user can still collapse it; the choice isn't persisted across tabs.
-  const [gitHistoryOpen, setGitHistoryOpen] = useState(true);
+  // The git panel's bottom area is a Diff/History tab pair. History shows by default; clicking
+  // a changed file in the status list switches to Diff and loads that file's diff.
+  // Top-level git-panel tabs: "changes" (file list + diff) and "history" (commit log).
+  const [panelTab, setPanelTab] = useState<"changes" | "history">("changes");
+  const [selectedDiff, setSelectedDiff] = useState<{ path: string; mode: DiffMode } | null>(null);
+  // User-resizable height (px) of the bottom Diff/History panel — dragged via the splitter
+  // between it and the changes list above.
+  const [gitBottomHeight, setGitBottomHeight] = useState(300);
+  // Bumped on every git-status fetch so an open diff re-pulls and reflects fresh edits.
+  const [gitTick, setGitTick] = useState(0);
   // Branch dropdown anchor — null when closed. The chip in the panel header opens the
   // dropdown next to itself; we capture the rect on open and reuse it for positioning.
   const [branchDropdown, setBranchDropdown] = useState<{ rect: DOMRect; el: HTMLElement } | null>(null);
@@ -235,6 +259,26 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
 
   const showTt = useCallback((text: string, el: HTMLElement) => setTooltip({ text, rect: el.getBoundingClientRect() }), []);
   const hideTt = useCallback(() => setTooltip(null), []);
+
+  // Delayed-tooltip variant for git-change rows — like the file explorer, it waits ~1s so the
+  // hint ("Click to show diff") doesn't flicker as the cursor scans the list.
+  const ttTimerRef = useRef<number | null>(null);
+  const showTtDelayed = useCallback((text: string, el: HTMLElement) => {
+    if (ttTimerRef.current) window.clearTimeout(ttTimerRef.current);
+    ttTimerRef.current = window.setTimeout(() => showTt(text, el), 1000);
+  }, [showTt]);
+  const hideTtNow = useCallback(() => { if (ttTimerRef.current) window.clearTimeout(ttTimerRef.current); hideTt(); }, [hideTt]);
+  useEffect(() => () => { if (ttTimerRef.current) window.clearTimeout(ttTimerRef.current); }, []);
+
+  // Right-click context menu over a git change row (Show diff / Stage·Unstage / Discard).
+  const [gitCtx, setGitCtx] = useState<{ x: number; y: number; column: DiffMode; postRename: string; confirmDiscard?: boolean } | null>(null);
+  const openGitCtx = useCallback((x: number, y: number, column: DiffMode, postRename: string) => setGitCtx({ x, y, column, postRename }), []);
+  useEffect(() => {
+    if (!gitCtx) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setGitCtx(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [gitCtx]);
 
   // Zoom state kept in a ref so the key handler sees the latest value without re-binding.
   const fontSizeRef = useRef<number>(defaultFontSize);
@@ -524,11 +568,11 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     }
   }, [webglRendering]);
 
-  // Refit terminal whenever the git panel opens/closes or resizes
+  // Refit terminal whenever either side panel opens/closes or the shared width changes
   useEffect(() => {
     if (!fitAddonRef.current) return;
     requestAnimationFrame(() => fitAddonRef.current?.fit());
-  }, [showGitPanel, gitPanelWidth]);
+  }, [showGitPanel, showFilePanel, gitPanelWidth]);
 
   // Live-update the full xterm palette whenever the app theme or the user's bg-override
   // changes. Using `paletteFor` keeps the brand-relative colors (cursor, ANSI) consistent
@@ -563,6 +607,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
       prevFileKeysRef.current = currentKeys;
       gitPolledOnceRef.current = true;
       setGitStatus(status);
+      setGitTick(t => t + 1); // nudge the open diff to re-pull (catches edits to the shown file)
       if (changed.size > 0) {
         setRecentlyChangedPaths(changed);
         if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
@@ -592,6 +637,15 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
   const handleUnstageFile = useCallback(async (path: string) => {
     if (!tab.projectPath) return;
     try { await invoke("git_unstage", { cwd: tab.projectPath, paths: [path] }); } catch (_) {}
+    fetchGitStatus();
+  }, [tab.projectPath, fetchGitStatus]);
+
+  // Discard a file's changes (destructive — the context menu confirms first). Untracked files are
+  // deleted; tracked files are reverted to HEAD. Clears the diff selection if it was that file.
+  const handleDiscardFile = useCallback(async (path: string, untracked: boolean) => {
+    if (!tab.projectPath) return;
+    try { await invoke("git_discard", { cwd: tab.projectPath, path, untracked }); } catch (_) {}
+    setSelectedDiff(prev => (prev && prev.path === path ? null : prev));
     fetchGitStatus();
   }, [tab.projectPath, fetchGitStatus]);
 
@@ -780,12 +834,15 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     return () => window.clearInterval(interval);
   }, [isActive, tab.projectPath, tab.sessionId, tab.shellMode, checkBranch]);
 
-  // Refresh commit history whenever the history section is opened, and when `ahead` changes
+  // Refresh commit history whenever the History tab is shown, and when `ahead` changes
   // (likely a new local commit). Cheap enough to just re-fetch alongside normal polls too.
   useEffect(() => {
-    if (!showGitPanel || !gitHistoryOpen) return;
+    if (!showGitPanel || panelTab !== "history") return;
     fetchGitLog();
-  }, [showGitPanel, gitHistoryOpen, gitStatus?.ahead, gitStatus?.branch, fetchGitLog]);
+  }, [showGitPanel, panelTab, gitStatus?.ahead, gitStatus?.branch, fetchGitLog]);
+
+  // Click a file in the status list → show its diff in the Diff tab.
+  const selectDiff = useCallback((path: string, mode: DiffMode) => { setSelectedDiff({ path, mode }); setPanelTab("changes"); }, []);
 
   // Clear any pending highlight timer on unmount
   useEffect(() => () => { if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current); }, []);
@@ -795,9 +852,12 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     e.preventDefault();
     const startX = e.clientX;
     const startWidth = gitPanelWidth;
+    // Cap to the available body width so the panel can stretch across (almost) the whole terminal.
+    const bodyWidth = e.currentTarget.parentElement?.clientWidth ?? window.innerWidth;
+    const maxPanel = Math.max(MIN_PANEL, bodyWidth - PANEL_EDGE_RESERVE);
     const onMove = (ev: PointerEvent) => {
       const delta = startX - ev.clientX;
-      setGitPanelWidth(Math.max(MIN_PANEL, Math.min(MAX_PANEL, startWidth + delta)));
+      setGitPanelWidth(Math.max(MIN_PANEL, Math.min(maxPanel, startWidth + delta)));
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -811,10 +871,45 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
     document.body.style.userSelect = "none";
   }, [gitPanelWidth]);
 
+  // Vertical splitter between the changes list and the Diff/History panel — drag up = taller.
+  const onGitBottomSplitterDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = gitBottomHeight;
+    // Clamp against the actual panel height so the diff/history area can be dragged from a thin
+    // sliver up to nearly the whole panel (leaving the header + a couple of changes rows).
+    const panelH = e.currentTarget.parentElement?.clientHeight ?? window.innerHeight;
+    const maxH = Math.max(80, panelH - 90);
+    const onMove = (ev: PointerEvent) => setGitBottomHeight(Math.max(60, Math.min(maxH, startH + (startY - ev.clientY))));
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+  }, [gitBottomHeight]);
+
   const stagedFiles = (gitStatus?.files || []).filter(f => f.staged !== " " && f.staged !== "?");
   const unstagedFiles = (gitStatus?.files || []).filter(f => f.unstaged !== " " && f.staged !== "?");
   const untrackedFiles = (gitStatus?.files || []).filter(f => f.staged === "?");
   const totalChanges = (gitStatus?.files.length) || 0;
+
+  // On opening the git panel (fresh terminal / after restart), default to showing the first
+  // change's diff — pick the first file in display order (Staged → Changes → Untracked) when
+  // nothing is selected yet. Leaves an existing selection alone.
+  useEffect(() => {
+    if (!showGitPanel || selectedDiff) return;
+    const first = stagedFiles[0] || unstagedFiles[0] || untrackedFiles[0];
+    if (!first) return;
+    const mode: DiffMode = first.staged === "?" ? "untracked" : first.staged !== " " ? "staged" : "unstaged";
+    const postRename = first.path.includes(" -> ") ? first.path.split(" -> ").pop()! : first.path;
+    setSelectedDiff({ path: postRename, mode });
+    setPanelTab("changes");
+  }, [showGitPanel, selectedDiff, stagedFiles, unstagedFiles, untrackedFiles]);
 
   const gitCounts = [
     gitStatus?.ahead ? `↑${gitStatus.ahead} ahead` : null,
@@ -879,7 +974,20 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
         </div>
       )}
       <div className="terminal-body">
-        <div className="terminal-container" ref={containerRef} style={{ background: paletteFor(theme, terminalBgColor).background }}>
+        <div
+          className="terminal-container"
+          ref={containerRef}
+          style={{ background: paletteFor(theme, terminalBgColor).background }}
+          onDragOver={(e) => { if (e.dataTransfer.types.includes(DRAG_PATH_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
+          onDrop={(e) => {
+            const p = e.dataTransfer.getData(DRAG_PATH_MIME) || e.dataTransfer.getData("text/plain");
+            if (!p) return;
+            e.preventDefault();
+            // Quote paths with spaces (common on Windows); trailing space lets the user keep typing.
+            invoke("write_terminal", { id: tab.id, data: /\s/.test(p) ? `"${p}" ` : `${p} ` }).catch(() => {});
+            terminalRef.current?.focus();
+          }}
+        >
           {isInitializing && (
             <div className="terminal-loading-overlay">
               <div className="spinner" />
@@ -914,20 +1022,51 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
                   <button className="branch-error-dismiss" onClick={dismissCheckoutError} aria-label="Dismiss"><XIcon size={11} /></button>
                 </div>
               )}
-              <div className="git-panel-scroll">
-                {totalChanges === 0 && <div className="git-panel-empty">Working tree clean</div>}
-                {stagedFiles.length > 0 && <GitSection label="Staged" files={stagedFiles} column="staged" filenamesOnly={gitPanelFilenamesOnly} highlightedPaths={recentlyChangedPaths} onStage={handleStageFile} onUnstage={handleUnstageFile} showTt={showTt} hideTt={hideTt} />}
-                {unstagedFiles.length > 0 && <GitSection label="Changes" files={unstagedFiles} column="unstaged" filenamesOnly={gitPanelFilenamesOnly} highlightedPaths={recentlyChangedPaths} onStage={handleStageFile} onUnstage={handleUnstageFile} showTt={showTt} hideTt={hideTt} />}
-                {untrackedFiles.length > 0 && <GitSection label="Untracked" files={untrackedFiles} column="untracked" filenamesOnly={gitPanelFilenamesOnly} highlightedPaths={recentlyChangedPaths} onStage={handleStageFile} onUnstage={handleUnstageFile} showTt={showTt} hideTt={hideTt} />}
-                <GitHistorySection open={gitHistoryOpen} commits={gitCommits} onToggle={() => setGitHistoryOpen(v => !v)} showTt={showTt} hideTt={hideTt} />
+              <div className="git-tabs">
+                <button className={`git-tab ${panelTab === "changes" ? "active" : ""}`} onClick={() => setPanelTab("changes")}>
+                  <FileDiff size={12} /><span>Changes</span>
+                </button>
+                <button className={`git-tab ${panelTab === "history" ? "active" : ""}`} onClick={() => setPanelTab("history")}>
+                  <History size={12} /><span>History</span>
+                </button>
               </div>
+              {panelTab === "changes" ? (
+                <>
+                  <div className="git-panel-scroll git-status-scroll">
+                    {totalChanges === 0 && <div className="git-panel-empty">Working tree clean</div>}
+                    {stagedFiles.length > 0 && <GitSection label="Staged" files={stagedFiles} column="staged" tree={gitChangesTree} highlightedPaths={recentlyChangedPaths} selectedPath={selectedDiff?.path ?? null} activePath={gitCtx?.postRename ?? null} activeColumn={gitCtx?.column ?? null} onSelect={selectDiff} onStage={handleStageFile} onUnstage={handleUnstageFile} onContext={openGitCtx} showTt={showTtDelayed} hideTt={hideTtNow} />}
+                    {unstagedFiles.length > 0 && <GitSection label="Changes" files={unstagedFiles} column="unstaged" tree={gitChangesTree} highlightedPaths={recentlyChangedPaths} selectedPath={selectedDiff?.path ?? null} activePath={gitCtx?.postRename ?? null} activeColumn={gitCtx?.column ?? null} onSelect={selectDiff} onStage={handleStageFile} onUnstage={handleUnstageFile} onContext={openGitCtx} showTt={showTtDelayed} hideTt={hideTtNow} />}
+                    {untrackedFiles.length > 0 && <GitSection label="Untracked" files={untrackedFiles} column="untracked" tree={gitChangesTree} highlightedPaths={recentlyChangedPaths} selectedPath={selectedDiff?.path ?? null} activePath={gitCtx?.postRename ?? null} activeColumn={gitCtx?.column ?? null} onSelect={selectDiff} onStage={handleStageFile} onUnstage={handleUnstageFile} onContext={openGitCtx} showTt={showTtDelayed} hideTt={hideTtNow} />}
+                  </div>
+                  <div className="git-hsplitter" onPointerDown={onGitBottomSplitterDown} onMouseEnter={(e) => showTt("Drag to resize", e.currentTarget)} onMouseLeave={hideTt} />
+                  <div className="git-bottom" style={{ height: gitBottomHeight }}>
+                    <div className="git-tab-body">
+                      <DiffView cwd={tab.projectPath || "."} file={selectedDiff} version={gitTick} />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="git-tab-body">
+                  <GitHistoryList commits={gitCommits} showTt={showTt} hideTt={hideTt} />
+                </div>
+              )}
             </div>
           </>
         )}
-        {/* Activity bar — claude-only, persistent. Currently hosts the git toggle; future
-            slots (file explorer, search, etc) will land here too. Disabled-but-visible when
-            the panel feature is off or the cwd isn't a git repo, so the bar's column doesn't
-            jump in/out as the user switches tabs. */}
+        {isClaudeSession && tab.projectPath && fileExplorerMounted && (
+          // Kept mounted once opened (toggled with `display`, not unmounted) so the explorer's
+          // path + expansion state persist across panel toggles and tab switches.
+          <>
+            <div className="terminal-splitter" style={{ display: showFilePanel ? undefined : "none" }} onPointerDown={onSplitterDown} onMouseEnter={(e) => showTt("Drag to resize", e.currentTarget)} onMouseLeave={hideTt} />
+            <div className="terminal-side-panel" style={{ width: gitPanelWidth, display: showFilePanel ? undefined : "none" }}>
+              <FileExplorerPanel rootPath={tab.projectPath} terminalId={tab.id} showTt={showTt} hideTt={hideTt} />
+            </div>
+          </>
+        )}
+        {/* Activity bar — claude-only, persistent. Hosts the git + file-explorer toggles; the
+            two panels share one slot (opening one closes the other). The git button is
+            disabled-but-visible when the cwd isn't a repo, so the bar's column doesn't jump
+            in/out as the user switches tabs. */}
         {isClaudeSession && (
           <div className="terminal-activity-bar">
             {(() => {
@@ -937,7 +1076,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
                 <button
                   className={`terminal-activity-btn ${showGitPanel ? "active" : ""}`}
                   disabled={gitDisabled}
-                  onClick={() => { if (gitDisabled) return; setShowGitPanel(v => !v); if (!showGitPanel) fetchGitStatus(); hideTt(); }}
+                  onClick={() => { if (gitDisabled) return; setShowFilePanel(false); setShowGitPanel(v => !v); if (!showGitPanel) fetchGitStatus(); hideTt(); }}
                   onMouseEnter={(e) => showTt(tip, e.currentTarget)}
                   onMouseLeave={hideTt}
                   aria-label="Toggle git panel"
@@ -947,10 +1086,42 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitPanelFilenamesOn
                 </button>
               );
             })()}
+            <button
+              className={`terminal-activity-btn ${showFilePanel ? "active" : ""}`}
+              disabled={!tab.projectPath}
+              onClick={() => { if (!tab.projectPath) return; setShowGitPanel(false); setFileExplorerMounted(true); setShowFilePanel(v => !v); hideTt(); }}
+              onMouseEnter={(e) => showTt(`${showFilePanel ? "Hide" : "Show"} file explorer`, e.currentTarget)}
+              onMouseLeave={hideTt}
+              aria-label="Toggle file explorer"
+            >
+              <FolderTree size={15} />
+            </button>
           </div>
         )}
       </div>
       {tooltip && <TerminalTooltip text={tooltip.text} rect={tooltip.rect} />}
+      {gitCtx && (
+        <>
+          <div className="file-ctx-backdrop" onClick={() => setGitCtx(null)} onContextMenu={(e) => { e.preventDefault(); setGitCtx(null); }} />
+          <div className="file-ctx-menu" style={{ left: Math.min(gitCtx.x, window.innerWidth - 230), top: Math.min(gitCtx.y, window.innerHeight - 150) }}>
+            {gitCtx.confirmDiscard ? (
+              <>
+                <div className="file-ctx-confirm">Discard changes to <b>{basename(gitCtx.postRename)}</b>? This can’t be undone.</div>
+                <button className="file-ctx-item file-ctx-danger" onClick={() => { handleDiscardFile(gitCtx.postRename, gitCtx.column === "untracked"); setGitCtx(null); }}><RotateCcw size={13} /><span>Discard{gitCtx.column === "untracked" ? " (delete file)" : ""}</span></button>
+                <button className="file-ctx-item" onClick={() => setGitCtx(c => c ? { ...c, confirmDiscard: false } : null)}><XIcon size={13} /><span>Cancel</span></button>
+              </>
+            ) : (
+              <>
+                <button className="file-ctx-item" onClick={() => { selectDiff(gitCtx.postRename, gitCtx.column); setGitCtx(null); }}><FileDiff size={13} /><span>Show diff</span></button>
+                {gitCtx.column === "staged"
+                  ? <button className="file-ctx-item" onClick={() => { handleUnstageFile(gitCtx.postRename); setGitCtx(null); }}><Minus size={13} /><span>Unstage</span></button>
+                  : <button className="file-ctx-item" onClick={() => { handleStageFile(gitCtx.postRename); setGitCtx(null); }}><Plus size={13} /><span>Stage</span></button>}
+                <button className="file-ctx-item file-ctx-danger" onClick={() => setGitCtx(c => c ? { ...c, confirmDiscard: true } : null)}><RotateCcw size={13} /><span>Discard changes</span></button>
+              </>
+            )}
+          </div>
+        </>
+      )}
       {branchDropdown && tab.projectPath && gitStatus && (
         <BranchDropdown
           cwd={tab.projectPath}
@@ -973,56 +1144,259 @@ function basename(p: string): string {
   return i >= 0 ? p.slice(i + 1) : p;
 }
 
-function GitSection({ label, files, column, filenamesOnly, highlightedPaths, onStage, onUnstage, showTt, hideTt }: { label: string; files: GitFile[]; column: "staged" | "unstaged" | "untracked"; filenamesOnly: boolean; highlightedPaths: Set<string>; onStage: (path: string) => void; onUnstage: (path: string) => void; showTt: (text: string, el: HTMLElement) => void; hideTt: () => void }) {
+type DiffMode = "staged" | "unstaged" | "untracked";
+
+// ── Git changes folder tree ───────────────────────────────────────────
+// Each changed file is grouped under its directory (VS Code-style), with single-child folder
+// chains compacted (e.g. `src/ViewModels`). Built from the flat status list per section.
+type GitFileEntry = { name: string; path: string; gitPath: string; ch: string };
+type GitTreeNode = { type: "dir"; name: string; path: string; children: GitTreeNode[] } | { type: "file"; entry: GitFileEntry };
+
+function buildGitTree(entries: GitFileEntry[]): GitTreeNode[] {
+  type Tmp = { name: string; path: string; dirs: Map<string, Tmp>; files: GitFileEntry[] };
+  const root: Tmp = { name: "", path: "", dirs: new Map(), files: [] };
+  for (const e of entries) {
+    const parts = e.path.split(/[\\/]/);
+    parts.pop(); // drop the filename
+    let cur = root, cp = "";
+    for (const seg of parts) {
+      if (!seg) continue;
+      cp = cp ? `${cp}/${seg}` : seg;
+      let next = cur.dirs.get(seg);
+      if (!next) { next = { name: seg, path: cp, dirs: new Map(), files: [] }; cur.dirs.set(seg, next); }
+      cur = next;
+    }
+    cur.files.push(e);
+  }
+  const conv = (t: Tmp): GitTreeNode[] => {
+    const nodes: GitTreeNode[] = [];
+    for (const dn of [...t.dirs.keys()].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))) {
+      let node = t.dirs.get(dn)!, name = node.name;
+      while (node.dirs.size === 1 && node.files.length === 0) { const child = [...node.dirs.values()][0]; name = `${name}/${child.name}`; node = child; }
+      nodes.push({ type: "dir", name, path: node.path, children: conv(node) });
+    }
+    for (const f of [...t.files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))) nodes.push({ type: "file", entry: f });
+    return nodes;
+  };
+  return conv(root);
+}
+
+function GitSection({ label, files, column, tree, highlightedPaths, selectedPath, activePath, activeColumn, onSelect, onStage, onUnstage, onContext, showTt, hideTt }: { label: string; files: GitFile[]; column: DiffMode; tree: boolean; highlightedPaths: Set<string>; selectedPath: string | null; activePath: string | null; activeColumn: DiffMode | null; onSelect: (path: string, mode: DiffMode) => void; onStage: (path: string) => void; onUnstage: (path: string) => void; onContext: (x: number, y: number, column: DiffMode, postRename: string) => void; showTt: (text: string, el: HTMLElement) => void; hideTt: () => void }) {
   const isStagedCol = column === "staged";
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const toggle = (p: string) => setCollapsed(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
+
+  const entries: GitFileEntry[] = files.map(f => {
+    const raw = isStagedCol ? f.staged : column === "unstaged" ? f.unstaged : "?";
+    const ch = raw === "?" ? "U" : (raw.trim() || "M");
+    const postRename = f.path.includes(" -> ") ? f.path.split(" -> ").pop()! : f.path;
+    return { name: basename(postRename), path: postRename, gitPath: f.path, ch };
+  });
+
+  // One file row, shared by the tree and the flat list. `dirHint` (flat mode) shows the file's
+  // folder dimmed after the name, VS Code-style. Right-click highlights the row (active) like hover.
+  const fileRow = (e: GitFileEntry, pad: number, dirHint: string | null) => {
+    const selected = selectedPath === e.path;
+    const active = activePath === e.path && activeColumn === column;
+    const highlighted = highlightedPaths.has(e.gitPath);
+    return (
+      <div
+        key={`f:${e.path}`}
+        className={`git-tree-row git-tree-file ${dirHint !== null ? "git-tree-flat" : ""} ${highlighted ? "git-file-blink" : ""} ${selected ? "git-file-selected" : ""} ${active ? "git-file-context" : ""}`}
+        style={{ paddingLeft: pad }}
+        onClick={() => onSelect(e.path, column)}
+        onContextMenu={(ev) => { ev.preventDefault(); ev.stopPropagation(); onContext(ev.clientX, ev.clientY, column, e.path); }}
+        onMouseEnter={(ev) => showTt("Click to show diff", ev.currentTarget)}
+        onMouseLeave={hideTt}
+      >
+        <span className="git-tree-chev" />
+        <img className="git-tree-icon" src={fileIconUrl(e.name)} alt="" draggable={false} />
+        <span className="git-tree-name">{e.name}</span>
+        {dirHint ? <span className="git-tree-dir-hint">{dirHint}</span> : null}
+        <button className="git-file-action" onClick={(ev) => { ev.stopPropagation(); (isStagedCol ? onUnstage : onStage)(e.path); }} onMouseEnter={(ev) => showTt(isStagedCol ? "Unstage" : "Stage", ev.currentTarget)} onMouseLeave={hideTt} aria-label={isStagedCol ? "Unstage" : "Stage"}>{isStagedCol ? <Minus size={11} /> : <Plus size={11} />}</button>
+        <span className={`git-tree-status gs-${e.ch}`}>{e.ch}</span>
+      </div>
+    );
+  };
+
+  const renderTree = (nodes: GitTreeNode[], depth: number): React.ReactNode[] => nodes.map((node) => {
+    if (node.type === "file") return fileRow(node.entry, 8 + depth * 12, null);
+    const isCollapsed = collapsed.has(node.path);
+    return (
+      <div key={`d:${node.path}`}>
+        <div className="git-tree-row git-tree-dir" style={{ paddingLeft: 8 + depth * 12 }} onClick={() => toggle(node.path)}>
+          <span className="git-tree-chev"><ChevronRight size={12} className={isCollapsed ? "" : "open"} /></span>
+          <img className="git-tree-icon" src={plainFolderIconUrl(!isCollapsed)} alt="" draggable={false} />
+          <span className="git-tree-name">{node.name}</span>
+        </div>
+        {/* Children stay mounted; the grid-rows transition (shared with the file explorer) animates open/closed. */}
+        <div className={`file-children ${isCollapsed ? "" : "open"}`}>
+          <div className="file-children-inner">{renderTree(node.children, depth + 1)}</div>
+        </div>
+      </div>
+    );
+  });
+
+  const dirOf = (p: string) => { const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")); return i >= 0 ? p.slice(0, i) : ""; };
+  const flatRows = [...entries].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())).map(e => fileRow(e, 8, dirOf(e.path)));
+
   return (
     <div className="git-section">
       <div className="git-section-header"><span>{label}</span><span className="git-section-count">{files.length}</span></div>
-      {files.map((f, i) => {
-        const ch = isStagedCol ? f.staged : column === "unstaged" ? f.unstaged : "?";
-        const postRename = f.path.includes(" -> ") ? f.path.split(" -> ").pop()! : f.path;
-        const displayName = filenamesOnly ? basename(postRename) : postRename;
-        const statusName: Record<string, string> = { M: "Modified", A: "Added", D: "Deleted", R: "Renamed", C: "Copied", U: "Untracked", "?": "Untracked" };
-        const tipText = `${statusName[ch] || "Changed"} — ${f.path}`;
-        const highlighted = highlightedPaths.has(f.path);
-        return (
-          <div key={i} className={`git-file ${highlighted ? "git-file-blink" : ""}`} onMouseEnter={(e) => showTt(tipText, e.currentTarget)} onMouseLeave={hideTt}>
-            <span className={`git-file-status gs-${ch === "?" ? "U" : ch}`}>{ch === "?" ? "U" : ch.trim() || " "}</span>
-            <span className="git-file-path" title={filenamesOnly ? f.path : undefined}>{displayName}</span>
-            {isStagedCol ? (
-              <button className="git-file-action" onClick={(e) => { e.stopPropagation(); onUnstage(postRename); }} onMouseEnter={(ev) => showTt("Unstage", ev.currentTarget)} onMouseLeave={hideTt} aria-label="Unstage"><Minus size={11} /></button>
-            ) : (
-              <button className="git-file-action" onClick={(e) => { e.stopPropagation(); onStage(postRename); }} onMouseEnter={(ev) => showTt("Stage", ev.currentTarget)} onMouseLeave={hideTt} aria-label="Stage"><Plus size={11} /></button>
-            )}
-          </div>
-        );
-      })}
+      {tree ? renderTree(buildGitTree(entries), 0) : flatRows}
     </div>
   );
 }
 
-function GitHistorySection({ open, commits, onToggle, showTt, hideTt }: { open: boolean; commits: GitCommit[]; onToggle: () => void; showTt: (text: string, el: HTMLElement) => void; hideTt: () => void }) {
+function GitHistoryList({ commits, showTt, hideTt }: { commits: GitCommit[]; showTt: (text: string, el: HTMLElement) => void; hideTt: () => void }) {
+  if (commits.length === 0) return <div className="git-panel-empty">No commits</div>;
   return (
-    <div className="git-section git-history-section">
-      <div className={`git-section-header git-history-header ${open ? "open" : ""}`} onClick={onToggle}>
-        <ChevronRight size={11} className={`git-history-chev ${open ? "open" : ""}`} />
-        <History size={11} />
-        <span>History</span>
-        {open && commits.length > 0 && <span className="git-section-count">{commits.length}</span>}
-      </div>
-      {open && (
-        <div className="git-history-list">
-          {commits.length === 0 && <div className="git-history-empty">No commits</div>}
-          {commits.map((c) => (
-            <div key={c.hash} className="git-commit" onMouseEnter={(e) => showTt(`${c.short_hash} · ${c.author} · ${c.relative_time}`, e.currentTarget)} onMouseLeave={hideTt}>
-              <span className="git-commit-hash">{c.short_hash}</span>
-              <span className="git-commit-subject">{c.subject}</span>
-              <span className="git-commit-time">{c.relative_time}</span>
-            </div>
-          ))}
+    <div className="git-history-list">
+      {commits.map((c) => (
+        <div key={c.hash} className="git-commit" onMouseEnter={(e) => showTt(`${c.short_hash} · ${c.author} · ${c.relative_time}`, e.currentTarget)} onMouseLeave={hideTt}>
+          <span className="git-commit-hash">{c.short_hash}</span>
+          <span className="git-commit-subject">{c.subject}</span>
+          <span className="git-commit-time">{c.relative_time}</span>
         </div>
-      )}
+      ))}
     </div>
+  );
+}
+
+// ── Unified diff (git panel Diff tab) ─────────────────────────────────
+// Hand-rendered: fetch `git diff` text via the git_diff command and lay it out inline with
+// +/-/context coloring, old/new line gutters, a file header with +/- stats, and per-line
+// syntax highlighting (highlight.js, themed in App.css).
+type DiffRow = { kind: "hunk" | "add" | "del" | "ctx" | "note"; text: string; oldNo: number | null; newNo: number | null; section?: string; hunkNo?: number };
+
+// Map a file extension to a highlight.js language id (restricted to the common bundle).
+// Returns null for unknown types, in which case the diff renders as plain text.
+function diffLang(path: string): string | null {
+  const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+  const map: Record<string, string> = {
+    ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript",
+    js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+    json: "json", css: "css", scss: "scss", less: "less",
+    html: "xml", htm: "xml", xml: "xml", svg: "xml", vue: "xml",
+    rs: "rust", py: "python", rb: "ruby", go: "go", java: "java",
+    c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp",
+    cs: "csharp", php: "php", swift: "swift", kt: "kotlin", sql: "sql",
+    sh: "bash", bash: "bash", zsh: "bash", md: "markdown", markdown: "markdown",
+    yml: "yaml", yaml: "yaml", toml: "ini", ini: "ini",
+  };
+  const lang = map[ext];
+  return lang && hljs.getLanguage(lang) ? lang : null;
+}
+
+// Highlight a single diff line. Stateless per line — fine for code, occasional mis-coloring
+// inside a multi-line string/comment is acceptable in a narrow diff. null → render plain.
+function highlightLine(text: string, lang: string | null): string | null {
+  if (!lang || !text) return null;
+  try { return hljs.highlight(text, { language: lang, ignoreIllegals: true }).value; } catch { return null; }
+}
+
+function parseDiff(diff: string): DiffRow[] {
+  const rows: DiffRow[] = [];
+  let oldNo = 0, newNo = 0, hunkNo = 0;
+  for (const raw of diff.split("\n")) {
+    if (raw.startsWith("@@")) {
+      // @@ -oldStart,oldCount +newStart,newCount @@ optional-section-heading
+      const m = /@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)/.exec(raw);
+      let label = raw, section = "";
+      if (m) {
+        oldNo = parseInt(m[1], 10); newNo = parseInt(m[3], 10);
+        const count = m[4] ? parseInt(m[4], 10) : 1;
+        label = `Lines ${newNo}–${count > 0 ? newNo + count - 1 : newNo}`;
+        section = (m[5] || "").trim();
+      }
+      hunkNo++;
+      rows.push({ kind: "hunk", text: label, section, hunkNo, oldNo: null, newNo: null });
+      continue;
+    }
+    // Skip the file-header noise — the panel already knows which file this is.
+    if (/^(diff --git|index |--- |\+\+\+ |new file|deleted file|old mode|new mode|similarity |dissimilarity |rename |copy )/.test(raw)) continue;
+    if (raw.startsWith("Binary files") || raw.startsWith("GIT binary patch")) { rows.push({ kind: "note", text: "Binary file — no text diff", oldNo: null, newNo: null }); continue; }
+    if (raw.startsWith("\\")) { rows.push({ kind: "note", text: raw.replace(/^\\ /, ""), oldNo: null, newNo: null }); continue; }
+    if (raw === "") continue; // trailing blank from the split
+    if (raw.startsWith("+")) { rows.push({ kind: "add", text: raw.slice(1), oldNo: null, newNo: newNo++ }); continue; }
+    if (raw.startsWith("-")) { rows.push({ kind: "del", text: raw.slice(1), oldNo: oldNo++, newNo: null }); continue; }
+    rows.push({ kind: "ctx", text: raw.startsWith(" ") ? raw.slice(1) : raw, oldNo: oldNo++, newNo: newNo++ });
+  }
+  return rows;
+}
+
+function DiffView({ cwd, file, version }: { cwd: string; file: { path: string; mode: DiffMode } | null; version: number }) {
+  const [diff, setDiff] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Clear the previous file's diff the moment a different file is selected, so the loading
+  // spinner shows instead of briefly flashing the old file's diff. Not keyed on `version`, so
+  // the periodic background refresh updates in place without flicker.
+  useEffect(() => { setDiff(null); setError(null); }, [cwd, file?.path, file?.mode]);
+
+  useEffect(() => {
+    if (!file) { setDiff(null); setError(null); return; }
+    let alive = true;
+    setLoading(true); setError(null);
+    invoke<string>("git_diff", { cwd, path: file.path, mode: file.mode })
+      .then((d) => { if (alive) setDiff(d); })
+      .catch((e) => { if (alive) { setError(String(e)); setDiff(null); } })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [cwd, file?.path, file?.mode, version]);
+
+  const lang = file ? diffLang(file.path) : null;
+  // Parse + highlight once per (diff, language) rather than on every render.
+  const model = useMemo(() => {
+    if (!diff) return null;
+    const rows = parseDiff(diff);
+    let adds = 0, dels = 0;
+    for (const r of rows) { if (r.kind === "add") adds++; else if (r.kind === "del") dels++; }
+    const rendered = rows.map((r) => ({ row: r, html: (r.kind === "add" || r.kind === "del" || r.kind === "ctx") ? highlightLine(r.text, lang) : null }));
+    return { rendered, adds, dels };
+  }, [diff, lang]);
+
+  if (!file) return <div className="git-panel-empty">Select a file to view its diff</div>;
+  if (loading && diff === null) return <div className="diff-loading"><span className="diff-spin" /><span>Loading diff…</span></div>;
+  if (error) return <div className="git-panel-empty">{error}</div>;
+  if (!model || model.rendered.length === 0) return <div className="git-panel-empty">No changes</div>;
+
+  const modeLabel = file.mode === "staged" ? "Staged" : file.mode === "untracked" ? "Untracked" : "Changes";
+  return (
+    <>
+      <div className="diff-header">
+        <span className="diff-header-name" title={file.path}>{basename(file.path)}</span>
+        <span className="diff-header-mode">{modeLabel}</span>
+        <span className="diff-header-stats">
+          {model.adds > 0 && <span className="diff-stat-add">+{model.adds}</span>}
+          {model.dels > 0 && <span className="diff-stat-del">-{model.dels}</span>}
+        </span>
+      </div>
+      <div className="diff-scroll">
+        <div className="diff-view">
+          {model.rendered.map(({ row: r, html }, i) => {
+        if (r.kind === "hunk") return (
+          <div key={i} className="diff-hunk">
+            <span className="diff-hunk-label">Hunk {r.hunkNo}: {r.text}</span>
+            {r.section ? <span className="diff-hunk-ctx">{r.section}</span> : null}
+          </div>
+        );
+        if (r.kind === "note") return <div key={i} className="diff-row diff-note">{r.text}</div>;
+        return (
+          <div key={i} className={`diff-row diff-${r.kind}`}>
+            <span className="diff-gutter">{r.oldNo ?? ""}</span>
+            <span className="diff-gutter">{r.newNo ?? ""}</span>
+            <span className="diff-sign">{r.kind === "add" ? "+" : r.kind === "del" ? "-" : ""}</span>
+            {html !== null
+              ? <span className="diff-text" dangerouslySetInnerHTML={{ __html: html }} />
+              : <span className="diff-text">{r.text || " "}</span>}
+          </div>
+        );
+      })}
+        </div>
+      </div>
+    </>
   );
 }
 

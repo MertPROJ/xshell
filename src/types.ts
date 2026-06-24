@@ -155,6 +155,14 @@ export interface BranchInfo {
   title: string;
 }
 
+// One entry in the terminal's file-explorer panel — a single child of a directory,
+// listed lazily per-folder by the `list_dir` Tauri command.
+export interface DirItem {
+  name: string;
+  path: string;
+  is_dir: boolean;
+}
+
 // ── Sidebar layout (Discord-style folders) ──────────────────────────
 // Top-level sidebar is an ordered list of items: a project or a folder containing projects.
 export interface SidebarFolder {
