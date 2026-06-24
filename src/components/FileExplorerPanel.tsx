@@ -1,18 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronRight, RefreshCw, Folder, ArrowUp, Search, X as XIcon, FolderOpen, Terminal as TerminalIcon } from "lucide-react";
-import { getIconUrlForFilePath, getIconForDirectoryPath, getIconUrlByName, isMaterialIconName, type MaterialIcon } from "vscode-material-icons";
 import type { DirItem } from "../types";
 import { AgentIcon, type AgentId } from "../agents";
+import { fileIconUrl, folderIconUrl } from "../lib/fileIcons";
 
 // Agent config folders get their brand icon instead of a generic folder — a little flourish
 // so `.claude` / `.codex` / `.cursor` are recognizable at a glance. Matched by exact name.
 const AGENT_DIRS: Record<string, AgentId> = { ".claude": "claude", ".codex": "codex", ".cursor": "cursor" };
 function agentForDir(item: DirItem): AgentId | null { return item.is_dir ? (AGENT_DIRS[item.name.toLowerCase()] ?? null) : null; }
-
-// Static base path the Material Icon SVGs are copied to by vite-plugin-static-copy
-// (see vite.config.ts). Resolves against the app origin in both dev and the packaged build.
-const FILE_ICONS_URL = "/assets/material-icons";
 
 // Hover-tooltip delay for tree rows — they shouldn't pop the instant the cursor crosses a
 // row (that's noisy when scanning a folder). Header action buttons keep an instant tooltip.
@@ -52,13 +48,6 @@ function relDir(fullPath: string, root: string, name: string): string {
   return p.replace(/[\\/]+$/, "");
 }
 
-function fileIconUrl(name: string): string { return getIconUrlForFilePath(name, FILE_ICONS_URL); }
-function folderIconUrl(name: string, open: boolean): string {
-  const base = getIconForDirectoryPath(name);
-  const candidate = `${base}-open` as MaterialIcon;
-  const icon: MaterialIcon = open && isMaterialIconName(candidate) ? candidate : base;
-  return getIconUrlByName(icon, FILE_ICONS_URL);
-}
 
 interface RowProps {
   item: DirItem;

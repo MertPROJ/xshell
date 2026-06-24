@@ -20,8 +20,8 @@ interface SettingsViewProps {
   onSetDefaultAgent: (agent: "ask" | AgentId) => void;
   gitLazyPolling: boolean;
   onSetGitLazyPolling: (enabled: boolean) => void;
-  gitPanelFilenamesOnly: boolean;
-  onSetGitPanelFilenamesOnly: (enabled: boolean) => void;
+  gitChangesTree: boolean;
+  onSetGitChangesTree: (enabled: boolean) => void;
   fileExplorerOnStart: boolean;
   onSetFileExplorerOnStart: (enabled: boolean) => void;
   contextTreeEnabled: boolean;
@@ -165,7 +165,7 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgent, gitLazyPolling, onSetGitLazyPolling, gitPanelFilenamesOnly, onSetGitPanelFilenamesOnly, fileExplorerOnStart, onSetFileExplorerOnStart, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, webglRendering, onSetWebglRendering, terminalFontWeight, onSetTerminalFontWeight, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showSessionRowMetricsCodex, onSetShowSessionRowMetricsCodex, showRateLimitInSidebarCodex, onSetShowRateLimitInSidebarCodex, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgent, gitLazyPolling, onSetGitLazyPolling, gitChangesTree, onSetGitChangesTree, fileExplorerOnStart, onSetFileExplorerOnStart, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, webglRendering, onSetWebglRendering, terminalFontWeight, onSetTerminalFontWeight, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showSessionRowMetricsCodex, onSetShowSessionRowMetricsCodex, showRateLimitInSidebarCodex, onSetShowRateLimitInSidebarCodex, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
@@ -397,8 +397,8 @@ export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgen
                 <SettingRow title="Only poll git when panel is open" description="When on (default), git status is fetched once when the session starts, then again only while the git panel is open. Turn off to keep polling every few seconds even when the panel is closed.">
                   <Toggle checked={gitLazyPolling} onChange={onSetGitLazyPolling} />
                 </SettingRow>
-                <SettingRow title="Filenames only" description="In the git panel, show just the file name (basename) instead of the full relative path. Hover a row to see the full path.">
-                  <Toggle checked={gitPanelFilenamesOnly} onChange={onSetGitPanelFilenamesOnly} />
+                <SettingRow title="Show folder structure in git changes" description="When on (default), changed files are grouped into a collapsible folder tree. Turn off for a flat list that shows each file's folder path dimmed next to its name (VS Code-style).">
+                  <Toggle checked={gitChangesTree} onChange={onSetGitChangesTree} />
                 </SettingRow>
                 <SettingRow title="Open file explorer on start" description="When on (default), the file-explorer panel opens automatically as each new agent terminal is opened. Applies to newly opened tabs; you can still toggle the panel anytime from the sidebar.">
                   <Toggle checked={fileExplorerOnStart} onChange={onSetFileExplorerOnStart} />

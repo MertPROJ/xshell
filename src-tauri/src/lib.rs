@@ -1512,10 +1512,14 @@ fn parse_porcelain(output: &str) -> GitStatus {
 }
 
 #[tauri::command]
-fn get_git_status(cwd: String) -> GitStatus {
+async fn get_git_status(cwd: String) -> GitStatus {
     use std::process::Command;
     let mut cmd = Command::new("git");
-    cmd.arg("status").arg("--porcelain=v1").arg("-b").current_dir(&cwd);
+    // core.quotePath=false: emit non-ASCII paths verbatim (UTF-8) instead of octal-escaped and
+    // wrapped in quotes. Without it, a file like `Prüflast.cs` comes back as `"Pr\303\274..."`,
+    // and that quoted string is then passed to `git diff -- <path>`, which finds nothing — so
+    // the diff (and the displayed name) breaks for any path with special characters.
+    cmd.arg("-c").arg("core.quotePath=false").arg("status").arg("--porcelain=v1").arg("-b").current_dir(&cwd);
     #[cfg(windows)]
     { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); } // CREATE_NO_WINDOW
     match cmd.output() {
@@ -1541,8 +1545,24 @@ fn git_cmd(cwd: &str) -> std::process::Command {
     cmd
 }
 
+// Repository top-level for `cwd`, or `cwd` itself if it isn't inside a repo. Path-taking git
+// commands (diff/add/reset) must run from here because `git status --porcelain` reports paths
+// relative to the repo root, while those commands resolve paths relative to the process cwd —
+// so a subdirectory cwd would otherwise never match the root-relative paths the UI passes back.
+fn git_root(cwd: &str) -> String {
+    let mut cmd = git_cmd(cwd);
+    cmd.arg("rev-parse").arg("--show-toplevel");
+    match cmd.output() {
+        Ok(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() { cwd.to_string() } else { s }
+        }
+        _ => cwd.to_string(),
+    }
+}
+
 #[tauri::command]
-fn get_git_log(cwd: String, limit: Option<u32>) -> Vec<GitCommit> {
+async fn get_git_log(cwd: String, limit: Option<u32>) -> Vec<GitCommit> {
     let n = limit.unwrap_or(20).max(1).min(200);
     // Use a rare-in-normal-text separator between fields so we don't collide with subjects.
     let mut cmd = git_cmd(&cwd);
@@ -1568,10 +1588,50 @@ fn normalize_git_path(p: &str) -> &str {
     match p.find(" -> ") { Some(idx) => &p[idx + 4..], None => p }
 }
 
+// Unified diff for a single changed file, for the git panel's Diff tab. For untracked files we
+// show the whole file as additions (--no-index vs /dev/null). For tracked files we diff against
+// HEAD so the view captures staged AND unstaged changes together — clicking a file in either the
+// Staged or Changes section shows the complete diff. (Diffing only the clicked section was the
+// "No changes" bug: once edits were staged, the unstaged diff came back empty.) Falls back to
+// working-tree / index diffs when there's no HEAD yet (a fresh repo with no commits).
+#[tauri::command]
+async fn git_diff(cwd: String, path: String, mode: String) -> Result<String, String> {
+    let p = normalize_git_path(&path).to_string();
+    // Run from the repo top-level so the root-relative paths from `git status` resolve (see
+    // git_root) — otherwise a subdirectory cwd yields an empty diff and the panel shows
+    // "No changes" for every file.
+    let root = git_root(&cwd);
+    if mode == "untracked" {
+        let mut cmd = git_cmd(&root);
+        cmd.arg("diff").arg("--no-ext-diff").arg("--no-color").arg("--no-index").arg("--").arg("/dev/null").arg(&p);
+        let out = cmd.output().map_err(|e| format!("git diff failed: {}", e))?;
+        // --no-index exits 1 when the two inputs differ — the normal "found a diff" signal.
+        return match out.status.code() {
+            Some(0) | Some(1) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+            _ => Err(String::from_utf8_lossy(&out.stderr).into_owned()),
+        };
+    }
+    // --no-ext-diff: ignore external diff drivers (diff.external / `.gitattributes` diff=<driver>),
+    // which otherwise make `git diff` print nothing to stdout. --no-color keeps ANSI out of the text.
+    let run = |args: &[&str]| -> Option<String> {
+        let mut cmd = git_cmd(&root);
+        cmd.arg("diff").arg("--no-ext-diff").arg("--no-color");
+        for a in args { cmd.arg(a); }
+        cmd.arg("--").arg(&p);
+        cmd.output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    // HEAD captures staged + unstaged together; fall back to working-tree then index diffs
+    // (e.g. a fresh repo with no commits, where `git diff HEAD` fails).
+    if let Some(d) = run(&["HEAD"]) { if !d.trim().is_empty() { return Ok(d); } }
+    if let Some(d) = run(&[]) { if !d.trim().is_empty() { return Ok(d); } }
+    if let Some(d) = run(&["--cached"]) { if !d.trim().is_empty() { return Ok(d); } }
+    Ok(String::new())
+}
+
 #[tauri::command]
 fn git_stage(cwd: String, paths: Vec<String>) -> Result<(), String> {
     if paths.is_empty() { return Ok(()); }
-    let mut cmd = git_cmd(&cwd);
+    let mut cmd = git_cmd(&git_root(&cwd)); // root-relative paths from status; run from the top-level
     cmd.arg("add").arg("--");
     for p in &paths { cmd.arg(normalize_git_path(p)); }
     let out = cmd.output().map_err(|e| format!("git add failed: {}", e))?;
@@ -1662,7 +1722,7 @@ fn detect_session_branch(cwd: String, current_session_id: String, known_session_
 #[tauri::command]
 fn git_unstage(cwd: String, paths: Vec<String>) -> Result<(), String> {
     if paths.is_empty() { return Ok(()); }
-    let mut cmd = git_cmd(&cwd);
+    let mut cmd = git_cmd(&git_root(&cwd)); // root-relative paths from status; run from the top-level
     cmd.arg("reset").arg("HEAD").arg("--");
     for p in &paths { cmd.arg(normalize_git_path(p)); }
     let out = cmd.output().map_err(|e| format!("git reset failed: {}", e))?;
@@ -1672,6 +1732,24 @@ fn git_unstage(cwd: String, paths: Vec<String>) -> Result<(), String> {
         let stderr = String::from_utf8_lossy(&out.stderr);
         if !stderr.contains("ambiguous argument 'HEAD'") { return Err(stderr.to_string()); }
     }
+    Ok(())
+}
+
+// Discard a file's uncommitted changes. Untracked → delete the file; tracked → restore it to its
+// HEAD version (drops both staged and unstaged edits). Destructive and irreversible, so the UI
+// asks for confirmation before calling this. Runs from the repo root (root-relative paths).
+#[tauri::command]
+async fn git_discard(cwd: String, path: String, untracked: bool) -> Result<(), String> {
+    let root = git_root(&cwd);
+    let p = normalize_git_path(&path).to_string();
+    if untracked {
+        let full = std::path::Path::new(&root).join(&p);
+        return fs::remove_file(&full).map_err(|e| format!("Failed to delete {}: {}", p, e));
+    }
+    let mut cmd = git_cmd(&root);
+    cmd.arg("checkout").arg("HEAD").arg("--").arg(&p);
+    let out = cmd.output().map_err(|e| format!("git checkout failed: {}", e))?;
+    if !out.status.success() { return Err(String::from_utf8_lossy(&out.stderr).to_string()); }
     Ok(())
 }
 
@@ -2650,7 +2728,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState { terminals: Mutex::new(HashMap::new()) })
-        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, list_dir, search_dir, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_stage, git_unstage, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, list_cursor_projects, get_codex_context, get_cursor_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal])
+        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, list_dir, search_dir, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_diff, git_stage, git_unstage, git_discard, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, list_cursor_projects, get_codex_context, get_cursor_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

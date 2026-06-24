@@ -740,7 +740,8 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .git-panel-empty { padding: 12px; font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); text-align: center; }
 .git-section { margin-bottom: 6px; }
 .git-section-header { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; color: var(--text-tertiary); text-transform: uppercase; }
-.git-section-count { background: var(--bg-elevated); color: var(--text-secondary); padding: 1px 6px; border-radius: 8px; font-size: 9px; letter-spacing: 0; }
+/* Orange count badge, matching the activity-bar git badge. */
+.git-section-count { background: var(--accent-terracotta); color: #fff; font-weight: 700; padding: 1px 6px; border-radius: 8px; font-size: 9px; letter-spacing: 0; }
 .git-file { display: flex; align-items: center; gap: 8px; padding: 3px 10px; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); cursor: default; transition: background 0.08s; position: relative; }
 .git-file:hover { background: var(--bg-hover); color: var(--text-primary); }
 .git-file-status { flex-shrink: 0; width: 14px; text-align: center; font-weight: 600; font-size: 10px; }
@@ -754,6 +755,25 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .gs-R { color: #9a6dd7; }         /* renamed — purple */
 .gs-C { color: #42a4c9; }         /* copied — cyan */
 .gs-U { color: var(--text-muted); } /* untracked — muted */
+
+/* Git changes folder tree — folders (collapsible) + files with a Material icon and the status
+   letter pinned to the right (VS Code-style). Mirrors the file explorer's row look. */
+.git-tree-row { display: flex; align-items: center; gap: 4px; padding: 2px 10px 2px 0; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); white-space: nowrap; user-select: none; cursor: pointer; transition: background 0.08s; }
+.git-tree-row:hover { background: var(--bg-hover); color: var(--text-primary); }
+.git-tree-chev { flex: 0 0 auto; width: 14px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-muted); }
+.git-tree-chev svg { transition: transform 0.12s; }
+.git-tree-chev svg.open { transform: rotate(90deg); }
+.git-tree-icon { flex: 0 0 auto; width: 16px; height: 16px; display: block; pointer-events: none; }
+.git-tree-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.git-tree-dir .git-tree-name { color: var(--text-secondary); }
+.git-tree-status { flex: 0 0 auto; width: 14px; text-align: center; font-weight: 600; font-size: 10px; }
+.git-tree-row:hover .git-file-action { display: inline-flex; }
+/* Right-clicked row stays highlighted (like hover) while its context menu is open. */
+.git-tree-row.git-file-context { background: var(--bg-hover); color: var(--text-primary); }
+/* Flat mode (folder structure off): name keeps its natural width; the dimmed folder path takes
+   the slack after it and ellipsizes — VS Code-style "App.css  src/components". */
+.git-tree-flat .git-tree-name { flex: 0 1 auto; }
+.git-tree-dir-hint { flex: 1 1 auto; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); font-size: 9.5px; }
 
 /* ── File explorer panel ──────────────────────────────────────────── */
 /* Shares the side-panel chrome with the git panel (header, splitter). The tree is a flat list
@@ -810,6 +830,11 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .file-ctx-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 .file-ctx-item svg { flex-shrink: 0; color: var(--text-muted); }
 .file-ctx-item:hover svg { color: var(--accent-terracotta); }
+/* Destructive action (discard) + its inline confirmation. */
+.file-ctx-item.file-ctx-danger { color: #d97757; }
+.file-ctx-item.file-ctx-danger:hover { background: color-mix(in oklab, #b53333 18%, transparent); color: #e5816a; }
+.file-ctx-item.file-ctx-danger svg, .file-ctx-item.file-ctx-danger:hover svg { color: #d97757; }
+.file-ctx-confirm { padding: 7px 10px; max-width: 220px; font-size: 11px; line-height: 1.4; color: var(--text-secondary); white-space: normal; }
 
 /* Change-blink: fires when a file first appears in status or its state changes.
    The keyframes reach peak tint quickly, then fade out so later rows settle calmly. */
@@ -838,6 +863,77 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 .git-commit-hash { flex-shrink: 0; color: var(--accent-terracotta); font-size: 10px; letter-spacing: 0.3px; min-width: 50px; }
 .git-commit-subject { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .git-commit-time { flex-shrink: 0; font-size: 9.5px; color: var(--text-muted); }
+
+/* ── Git panel: status list + Diff/History bottom tabs ──────────────── */
+/* Status list sits on top (capped at 45% so it can't crowd out the diff); the tabbed
+   Diff/History area fills the rest. */
+/* Changes list grows to fill the space above the (user-sized) bottom panel; can shrink small
+   so the bottom panel can be dragged nearly full-height. */
+.git-status-scroll { flex: 1 1 auto; min-height: 36px; }
+/* Horizontal drag handle between the changes list and the Diff/History panel. */
+.git-hsplitter { flex-shrink: 0; height: 6px; cursor: row-resize; position: relative; }
+.git-hsplitter::before { content: ""; position: absolute; inset: 2px 0; background: var(--border-default); transition: background 0.12s; }
+.git-hsplitter:hover::before { background: var(--accent-terracotta); }
+/* Height is set inline (drag-resized, clamped against the panel height in JS). */
+.git-bottom { flex: 0 0 auto; min-height: 60px; display: flex; flex-direction: column; }
+.git-tabs { display: flex; flex-shrink: 0; border-bottom: 1px solid var(--border-subtle); }
+/* The two tabs split the panel width evenly (flex: 1). */
+.git-tab { flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 7px 8px; background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; cursor: pointer; transition: color 0.12s, border-color 0.12s, background 0.12s; }
+.git-tab svg { flex-shrink: 0; }
+.git-tab:hover { color: var(--text-secondary); background: var(--bg-hover); }
+.git-tab.active { color: var(--text-primary); border-bottom-color: var(--accent-terracotta); }
+.git-tab-count { min-width: 15px; padding: 0 4px; height: 14px; display: inline-flex; align-items: center; justify-content: center; background: var(--bg-elevated); color: var(--text-secondary); font-size: 9px; border-radius: 7px; }
+.git-tab.active .git-tab-count { background: var(--accent-terracotta); color: #fff; }
+.git-tab-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.git-tab-body .git-history-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.git-file { cursor: pointer; }
+.git-file-selected, .git-file-selected:hover { background: var(--bg-active); color: var(--text-primary); }
+
+/* Diff tab: fixed file header (name · mode · +/- stats) above a scrolling diff body. */
+.diff-header { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 11px; }
+.diff-header-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.diff-header-mode { flex-shrink: 0; font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); padding: 1px 6px; border: 1px solid var(--border-subtle); border-radius: 8px; }
+.diff-header-stats { flex-shrink: 0; display: inline-flex; gap: 6px; font-size: 10px; font-variant-numeric: tabular-nums; }
+.diff-stat-add { color: #4a9968; }
+.diff-stat-del { color: #b53333; }
+.diff-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
+/* Loading state while a diff is fetched (orange spinner + label). */
+.diff-loading { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px; color: var(--text-muted); font-size: 11px; font-family: var(--font-mono); }
+.diff-spin { width: 13px; height: 13px; border: 1.5px solid var(--border-default); border-top-color: var(--accent-terracotta); border-radius: 50%; animation: spin 0.7s linear infinite; }
+
+/* Hand-rendered unified diff. width:max-content lets long lines scroll horizontally while the
+   +/- row backgrounds still span the full line width. Tokens are colored by the highlight.js
+   theme below. */
+.diff-view { width: max-content; min-width: 100%; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; }
+.diff-row { display: flex; }
+.diff-gutter { flex: 0 0 auto; width: 34px; padding: 0 5px; text-align: right; color: var(--text-muted); opacity: 0.6; user-select: none; }
+.diff-sign { flex: 0 0 auto; width: 16px; text-align: center; user-select: none; border-left: 1px solid var(--border-subtle); }
+.diff-text { flex: 1 1 auto; white-space: pre; padding: 0 12px 0 6px; }
+.diff-add { background: rgba(74, 153, 104, 0.13); }
+.diff-add .diff-sign { color: #4a9968; }
+.diff-del { background: rgba(181, 51, 51, 0.13); }
+.diff-del .diff-sign { color: #b53333; }
+.diff-ctx { color: var(--text-secondary); }
+.diff-note { padding: 3px 10px; color: var(--text-muted); font-style: italic; }
+
+/* Hunk header bar — "Hunk N: Lines a-b" plus the enclosing section (function) dimmed. */
+.diff-hunk { display: flex; align-items: baseline; gap: 8px; padding: 4px 10px; background: var(--bg-elevated); border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); white-space: nowrap; }
+.diff-hunk:first-child { border-top: none; }
+.diff-hunk-label { flex-shrink: 0; color: var(--text-secondary); font-size: 10px; font-weight: 600; letter-spacing: 0.2px; }
+.diff-hunk-ctx { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); font-size: 10px; }
+
+/* highlight.js token colors, scoped to the diff and drawn from the app's ANSI palette. */
+.diff-view .hljs-comment, .diff-view .hljs-quote { color: var(--text-muted); font-style: italic; }
+.diff-view .hljs-keyword, .diff-view .hljs-selector-tag, .diff-view .hljs-section, .diff-view .hljs-doctag, .diff-view .hljs-name { color: #b088e0; }
+.diff-view .hljs-string, .diff-view .hljs-regexp, .diff-view .hljs-addition { color: #6cc088; }
+.diff-view .hljs-number, .diff-view .hljs-literal { color: #d97757; }
+.diff-view .hljs-title, .diff-view .hljs-title.function_ { color: #5ab0f0; }
+.diff-view .hljs-built_in, .diff-view .hljs-title.class_, .diff-view .hljs-type { color: #c9a042; }
+.diff-view .hljs-attr, .diff-view .hljs-attribute, .diff-view .hljs-property, .diff-view .hljs-variable, .diff-view .hljs-template-variable { color: #5ab0f0; }
+.diff-view .hljs-symbol, .diff-view .hljs-bullet, .diff-view .hljs-meta { color: #6cc0c0; }
+.diff-view .hljs-tag { color: var(--text-secondary); }
+.diff-view .hljs-strong { font-weight: 600; }
+.diff-view .hljs-emphasis { font-style: italic; }
 
 /* Branch detection banner — appears above the terminal body when claude /branch is detected */
 .branch-banner { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: linear-gradient(to right, rgba(201, 100, 66, 0.18), rgba(201, 100, 66, 0.08)); border-bottom: 1px solid rgba(201, 100, 66, 0.3); font-size: 11.5px; color: var(--text-primary); animation: branchBannerIn 0.22s cubic-bezier(.4, 0, .2, 1); }
