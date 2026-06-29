@@ -1059,7 +1059,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
           <>
             <div className="terminal-splitter" style={{ display: showFilePanel ? undefined : "none" }} onPointerDown={onSplitterDown} onMouseEnter={(e) => showTt("Drag to resize", e.currentTarget)} onMouseLeave={hideTt} />
             <div className="terminal-side-panel" style={{ width: gitPanelWidth, display: showFilePanel ? undefined : "none" }}>
-              <FileExplorerPanel rootPath={tab.projectPath} terminalId={tab.id} showTt={showTt} hideTt={hideTt} />
+              <FileExplorerPanel rootPath={tab.projectPath} terminalId={tab.id} visible={showFilePanel} showTt={showTt} hideTt={hideTt} />
             </div>
           </>
         )}
@@ -1191,7 +1191,7 @@ function GitSection({ label, files, column, tree, highlightedPaths, selectedPath
     const ch = raw === "?" ? "U" : (raw.trim() || "M");
     const postRename = f.path.includes(" -> ") ? f.path.split(" -> ").pop()! : f.path;
     return { name: basename(postRename), path: postRename, gitPath: f.path, ch };
-  });
+  }).filter(e => e.name.length > 0); // guard against directory entries (trailing-slash paths)
 
   // One file row, shared by the tree and the flat list. `dirHint` (flat mode) shows the file's
   // folder dimmed after the name, VS Code-style. Right-click highlights the row (active) like hover.

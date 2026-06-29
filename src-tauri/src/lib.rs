@@ -1384,7 +1384,7 @@ pub struct DirItem {
 }
 
 #[tauri::command]
-fn list_dir(path: String) -> Result<Vec<DirItem>, String> {
+async fn list_dir(path: String) -> Result<Vec<DirItem>, String> {
     let rd = fs::read_dir(&path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
     let mut items: Vec<DirItem> = Vec::new();
     for entry in rd.flatten() {
@@ -1519,7 +1519,10 @@ async fn get_git_status(cwd: String) -> GitStatus {
     // wrapped in quotes. Without it, a file like `Prüflast.cs` comes back as `"Pr\303\274..."`,
     // and that quoted string is then passed to `git diff -- <path>`, which finds nothing — so
     // the diff (and the displayed name) breaks for any path with special characters.
-    cmd.arg("-c").arg("core.quotePath=false").arg("status").arg("--porcelain=v1").arg("-b").current_dir(&cwd);
+    // --untracked-files=all: list each untracked file individually instead of collapsing a
+    // wholly-untracked directory into one `dir/` entry (which rendered as an empty-named row
+    // in the changes tree). Matches what VS Code's source-control view shows.
+    cmd.arg("-c").arg("core.quotePath=false").arg("status").arg("--porcelain=v1").arg("-b").arg("--untracked-files=all").current_dir(&cwd);
     #[cfg(windows)]
     { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); } // CREATE_NO_WINDOW
     match cmd.output() {

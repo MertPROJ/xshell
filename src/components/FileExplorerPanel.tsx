@@ -93,6 +93,7 @@ function FileRow({ item, depth, expanded, active, subtitle, onActivate, onContex
 interface NodeProps {
   item: DirItem;
   depth: number;
+  tick: number;
   activePath: string | null;
   onReveal: (path: string) => void;
   onContext: (x: number, y: number, item: DirItem) => void;
@@ -103,7 +104,7 @@ interface NodeProps {
 // One tree row + its lazily-loaded children. Children load on first expand and then stay
 // mounted (height-collapsed) so the open/close height transition is smooth and re-expanding
 // is instant. The grid-rows trick (0fr↔1fr) animates to the children's natural height.
-function Node({ item, depth, activePath, onReveal, onContext, showTt, hideTt }: NodeProps) {
+function Node({ item, depth, tick, activePath, onReveal, onContext, showTt, hideTt }: NodeProps) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<DirItem[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -119,6 +120,15 @@ function Node({ item, depth, activePath, onReveal, onContext, showTt, hideTt }: 
     return () => { alive = false; };
   }, [expanded, item.path, children]);
 
+  // Silent re-pull on each poll tick (only for an open, already-loaded folder) so additions /
+  // deletions inside it show up live. Collapsed or unloaded folders are skipped.
+  useEffect(() => {
+    if (tick === 0 || !expanded || children === null) return;
+    let alive = true;
+    invoke<DirItem[]>("list_dir", { path: item.path }).then((c) => { if (alive) setChildren(c); }).catch(() => {});
+    return () => { alive = false; };
+  }, [tick]);
+
   const onActivate = () => { if (item.is_dir) setExpanded((v) => !v); else onReveal(item.path); };
   const childPad = 6 + (depth + 1) * 12 + 14;
 
@@ -132,7 +142,7 @@ function Node({ item, depth, activePath, onReveal, onContext, showTt, hideTt }: 
               ? (loading && expanded ? <div className="file-row file-row-muted" style={{ paddingLeft: childPad }}>Loading…</div> : null)
               : children.length === 0
                 ? <div className="file-row file-row-muted" style={{ paddingLeft: childPad }}>Empty</div>
-                : children.map((c) => <Node key={c.path} item={c} depth={depth + 1} activePath={activePath} onReveal={onReveal} onContext={onContext} showTt={showTt} hideTt={hideTt} />)}
+                : children.map((c) => <Node key={c.path} item={c} depth={depth + 1} tick={tick} activePath={activePath} onReveal={onReveal} onContext={onContext} showTt={showTt} hideTt={hideTt} />)}
           </div>
         </div>
       )}
@@ -143,6 +153,7 @@ function Node({ item, depth, activePath, onReveal, onContext, showTt, hideTt }: 
 interface PanelProps {
   rootPath: string;
   terminalId: string;
+  visible: boolean;
   showTt: (text: string, el: HTMLElement) => void;
   hideTt: () => void;
 }
@@ -150,7 +161,7 @@ interface PanelProps {
 // Inner content of the file-explorer side panel — header (current dir + up/search/refresh) and
 // a scrollable area showing either the lazy tree or flat search results. TerminalTab wraps this
 // in the shared `.terminal-side-panel` + splitter, mirroring how the git panel is hosted.
-export function FileExplorerPanel({ rootPath, terminalId, showTt, hideTt }: PanelProps) {
+export function FileExplorerPanel({ rootPath, terminalId, visible, showTt, hideTt }: PanelProps) {
   // The browsable root. Starts at the terminal's cwd but the up-button can climb past it.
   const [cwd, setCwd] = useState(rootPath);
   const [roots, setRoots] = useState<DirItem[] | null>(null);
@@ -166,15 +177,30 @@ export function FileExplorerPanel({ rootPath, terminalId, showTt, hideTt }: Pane
   // Reset to the terminal's cwd if the tab's project path changes underneath us.
   useEffect(() => { setCwd(rootPath); }, [rootPath]);
 
-  const load = useCallback(() => {
-    setRefreshing(true);
+  const load = useCallback((silent = false) => {
+    if (!silent) setRefreshing(true);
     invoke<DirItem[]>("list_dir", { path: cwd })
       .then(setRoots)
       .catch(() => setRoots([]))
-      .finally(() => setRefreshing(false));
+      .finally(() => { if (!silent) setRefreshing(false); });
   }, [cwd]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Poll for filesystem changes while the panel is visible (the agent adds/removes files, etc.)
+  // so the tree updates without a manual refresh. `tick` is threaded into every Node so expanded
+  // sub-folders re-pull too; list_dir is async (off the UI thread) so this stays cheap. Silent
+  // (no spinner) and paused while hidden or searching.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!visible || searchOpen) return;
+    setTick(t => t + 1); // refresh right away on (re)show, then keep polling
+    const id = window.setInterval(() => setTick(t => t + 1), 2500);
+    return () => window.clearInterval(id);
+  }, [visible, searchOpen]);
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  useEffect(() => { if (tick > 0) loadRef.current(true); }, [tick]);
 
   // Debounced recursive search rooted at the current dir; empty query falls back to the tree.
   useEffect(() => {
@@ -227,7 +253,7 @@ export function FileExplorerPanel({ rootPath, terminalId, showTt, hideTt }: Pane
         <span className="file-panel-title" onMouseEnter={(e) => showTt(cwd, e.currentTarget)} onMouseLeave={hideTt}>{baseName(cwd)}</span>
         <button className="git-panel-refresh" disabled={!parent} onClick={() => parent && setCwd(parent)} onMouseEnter={(e) => showTt(parent ? "Go to parent folder" : "At filesystem root", e.currentTarget)} onMouseLeave={hideTt}><ArrowUp size={12} /></button>
         <button className={`git-panel-refresh ${searchOpen ? "active" : ""}`} onClick={() => { setSearchOpen((v) => !v); if (searchOpen) setQuery(""); }} onMouseEnter={(e) => showTt("Search", e.currentTarget)} onMouseLeave={hideTt}><Search size={12} /></button>
-        <button className={`git-panel-refresh ${refreshing ? "spinning" : ""}`} onClick={load} onMouseEnter={(e) => showTt("Refresh", e.currentTarget)} onMouseLeave={hideTt}><RefreshCw size={11} /></button>
+        <button className={`git-panel-refresh ${refreshing ? "spinning" : ""}`} onClick={() => load()} onMouseEnter={(e) => showTt("Refresh", e.currentTarget)} onMouseLeave={hideTt}><RefreshCw size={11} /></button>
       </div>
       {/* Always mounted; the grid-rows trick animates it open/closed smoothly (same approach
           as the folder expand/collapse). Input is taken out of the tab order while collapsed. */}
@@ -254,7 +280,7 @@ export function FileExplorerPanel({ rootPath, terminalId, showTt, hideTt }: Pane
           <>
             {roots === null && <div className="git-panel-empty">Loading…</div>}
             {roots !== null && roots.length === 0 && <div className="git-panel-empty">Empty folder</div>}
-            {roots?.map((item) => <Node key={item.path} item={item} depth={0} activePath={activePath} onReveal={reveal} onContext={openContext} showTt={showTtDelayed} hideTt={hideTtNow} />)}
+            {roots?.map((item) => <Node key={item.path} item={item} depth={0} tick={tick} activePath={activePath} onReveal={reveal} onContext={openContext} showTt={showTtDelayed} hideTt={hideTtNow} />)}
           </>
         )}
       </div>
