@@ -1892,6 +1892,23 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
         None
     };
     let effective_shell = gitbash_resolved.as_deref().or(shell_command.as_deref());
+    // PowerShell's command precedence ranks `.ps1` external scripts above `.cmd` shims, so a
+    // bare `claude` resolves to the unsigned npm `claude.ps1` — which an `AllSigned` execution
+    // policy refuses to run (issue #41). Resolve the `.cmd` shim explicitly for the PowerShell
+    // host: batch shims aren't subject to execution policy. Falls back to the bare name when no
+    // .cmd is on PATH (e.g. a native .exe install), where bare resolution is safe anyway.
+    #[cfg(windows)]
+    fn resolve_cmd_shim(bin: &str) -> Option<String> {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("where");
+        cmd.arg(format!("{}.cmd", bin));
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let out = cmd.output().ok()?;
+        if !out.status.success() { return None; }
+        String::from_utf8_lossy(&out.stdout).lines().next().map(|l| l.trim().to_string()).filter(|s| !s.is_empty())
+    }
+    #[cfg(not(windows))]
+    fn resolve_cmd_shim(_bin: &str) -> Option<String> { None }
     let mut cmd = if mode == "raw" {
         // Raw shell: spawn the chosen shell directly (no claude wrapping).
         let shell = effective_shell.unwrap_or_else(|| if cfg!(windows) { "powershell.exe" } else { "bash" });
@@ -1906,7 +1923,10 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
                 c.arg("-NoExit");
                 c.arg("-Command");
                 // & 'claude' 'arg1' 'arg2' — single-quoted to avoid PS expansion surprises.
-                let mut s = format!("& '{}'", agent_bin);
+                // Prefer the .cmd shim over the bare name so AllSigned policies don't block
+                // the unsigned .ps1 shim (see resolve_cmd_shim / issue #41).
+                let exec = resolve_cmd_shim(agent_bin).unwrap_or_else(|| agent_bin.to_string());
+                let mut s = format!("& '{}'", exec.replace('\'', "''"));
                 for a in &agent_args { s.push(' '); s.push('\''); s.push_str(&a.replace('\'', "''")); s.push('\''); }
                 c.arg(s);
                 c
