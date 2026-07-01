@@ -640,11 +640,25 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
     fetchGitStatus();
   }, [tab.projectPath, fetchGitStatus]);
 
-  // Discard a file's changes (destructive — the context menu confirms first). Untracked files are
-  // deleted; tracked files are reverted to HEAD. Clears the diff selection if it was that file.
-  const handleDiscardFile = useCallback(async (path: string, untracked: boolean) => {
+  // Bulk stage/unstage — the +/- button on a section header stages (or unstages) every file in it.
+  const handleStageAll = useCallback(async (paths: string[]) => {
+    if (!tab.projectPath || paths.length === 0) return;
+    try { await invoke("git_stage", { cwd: tab.projectPath, paths }); } catch (_) {}
+    fetchGitStatus();
+  }, [tab.projectPath, fetchGitStatus]);
+
+  const handleUnstageAll = useCallback(async (paths: string[]) => {
+    if (!tab.projectPath || paths.length === 0) return;
+    try { await invoke("git_unstage", { cwd: tab.projectPath, paths }); } catch (_) {}
+    fetchGitStatus();
+  }, [tab.projectPath, fetchGitStatus]);
+
+  // Discard a file's changes (destructive — the context menu confirms first). Section-scoped:
+  // unstaged drops only the working-tree edits (keeps staged), staged reverts to HEAD, untracked
+  // deletes. Clears the diff selection if it was that file.
+  const handleDiscardFile = useCallback(async (path: string, mode: DiffMode) => {
     if (!tab.projectPath) return;
-    try { await invoke("git_discard", { cwd: tab.projectPath, path, untracked }); } catch (_) {}
+    try { await invoke("git_discard", { cwd: tab.projectPath, path, mode }); } catch (_) {}
     setSelectedDiff(prev => (prev && prev.path === path ? null : prev));
     fetchGitStatus();
   }, [tab.projectPath, fetchGitStatus]);
@@ -1034,9 +1048,9 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
                 <>
                   <div className="git-panel-scroll git-status-scroll">
                     {totalChanges === 0 && <div className="git-panel-empty">Working tree clean</div>}
-                    {stagedFiles.length > 0 && <GitSection label="Staged" files={stagedFiles} column="staged" tree={gitChangesTree} highlightedPaths={recentlyChangedPaths} selectedPath={selectedDiff?.path ?? null} activePath={gitCtx?.postRename ?? null} activeColumn={gitCtx?.column ?? null} onSelect={selectDiff} onStage={handleStageFile} onUnstage={handleUnstageFile} onContext={openGitCtx} showTt={showTtDelayed} hideTt={hideTtNow} />}
-                    {unstagedFiles.length > 0 && <GitSection label="Changes" files={unstagedFiles} column="unstaged" tree={gitChangesTree} highlightedPaths={recentlyChangedPaths} selectedPath={selectedDiff?.path ?? null} activePath={gitCtx?.postRename ?? null} activeColumn={gitCtx?.column ?? null} onSelect={selectDiff} onStage={handleStageFile} onUnstage={handleUnstageFile} onContext={openGitCtx} showTt={showTtDelayed} hideTt={hideTtNow} />}
-                    {untrackedFiles.length > 0 && <GitSection label="Untracked" files={untrackedFiles} column="untracked" tree={gitChangesTree} highlightedPaths={recentlyChangedPaths} selectedPath={selectedDiff?.path ?? null} activePath={gitCtx?.postRename ?? null} activeColumn={gitCtx?.column ?? null} onSelect={selectDiff} onStage={handleStageFile} onUnstage={handleUnstageFile} onContext={openGitCtx} showTt={showTtDelayed} hideTt={hideTtNow} />}
+                    {stagedFiles.length > 0 && <GitSection label="Staged" files={stagedFiles} column="staged" tree={gitChangesTree} highlightedPaths={recentlyChangedPaths} selectedPath={selectedDiff?.path ?? null} selectedColumn={selectedDiff?.mode ?? null} activePath={gitCtx?.postRename ?? null} activeColumn={gitCtx?.column ?? null} onSelect={selectDiff} onStage={handleStageFile} onUnstage={handleUnstageFile} onStageAll={handleStageAll} onUnstageAll={handleUnstageAll} onContext={openGitCtx} showTt={showTtDelayed} hideTt={hideTtNow} />}
+                    {unstagedFiles.length > 0 && <GitSection label="Changes" files={unstagedFiles} column="unstaged" tree={gitChangesTree} highlightedPaths={recentlyChangedPaths} selectedPath={selectedDiff?.path ?? null} selectedColumn={selectedDiff?.mode ?? null} activePath={gitCtx?.postRename ?? null} activeColumn={gitCtx?.column ?? null} onSelect={selectDiff} onStage={handleStageFile} onUnstage={handleUnstageFile} onStageAll={handleStageAll} onUnstageAll={handleUnstageAll} onContext={openGitCtx} showTt={showTtDelayed} hideTt={hideTtNow} />}
+                    {untrackedFiles.length > 0 && <GitSection label="Untracked" files={untrackedFiles} column="untracked" tree={gitChangesTree} highlightedPaths={recentlyChangedPaths} selectedPath={selectedDiff?.path ?? null} selectedColumn={selectedDiff?.mode ?? null} activePath={gitCtx?.postRename ?? null} activeColumn={gitCtx?.column ?? null} onSelect={selectDiff} onStage={handleStageFile} onUnstage={handleUnstageFile} onStageAll={handleStageAll} onUnstageAll={handleUnstageAll} onContext={openGitCtx} showTt={showTtDelayed} hideTt={hideTtNow} />}
                   </div>
                   <div className="git-hsplitter" onPointerDown={onGitBottomSplitterDown} onMouseEnter={(e) => showTt("Drag to resize", e.currentTarget)} onMouseLeave={hideTt} />
                   <div className="git-bottom" style={{ height: gitBottomHeight }}>
@@ -1107,7 +1121,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
             {gitCtx.confirmDiscard ? (
               <>
                 <div className="file-ctx-confirm">Discard changes to <b>{basename(gitCtx.postRename)}</b>? This can’t be undone.</div>
-                <button className="file-ctx-item file-ctx-danger" onClick={() => { handleDiscardFile(gitCtx.postRename, gitCtx.column === "untracked"); setGitCtx(null); }}><RotateCcw size={13} /><span>Discard{gitCtx.column === "untracked" ? " (delete file)" : ""}</span></button>
+                <button className="file-ctx-item file-ctx-danger" onClick={() => { handleDiscardFile(gitCtx.postRename, gitCtx.column); setGitCtx(null); }}><RotateCcw size={13} /><span>Discard{gitCtx.column === "untracked" ? " (delete file)" : ""}</span></button>
                 <button className="file-ctx-item" onClick={() => setGitCtx(c => c ? { ...c, confirmDiscard: false } : null)}><XIcon size={13} /><span>Cancel</span></button>
               </>
             ) : (
@@ -1181,7 +1195,7 @@ function buildGitTree(entries: GitFileEntry[]): GitTreeNode[] {
   return conv(root);
 }
 
-function GitSection({ label, files, column, tree, highlightedPaths, selectedPath, activePath, activeColumn, onSelect, onStage, onUnstage, onContext, showTt, hideTt }: { label: string; files: GitFile[]; column: DiffMode; tree: boolean; highlightedPaths: Set<string>; selectedPath: string | null; activePath: string | null; activeColumn: DiffMode | null; onSelect: (path: string, mode: DiffMode) => void; onStage: (path: string) => void; onUnstage: (path: string) => void; onContext: (x: number, y: number, column: DiffMode, postRename: string) => void; showTt: (text: string, el: HTMLElement) => void; hideTt: () => void }) {
+function GitSection({ label, files, column, tree, highlightedPaths, selectedPath, selectedColumn, activePath, activeColumn, onSelect, onStage, onUnstage, onStageAll, onUnstageAll, onContext, showTt, hideTt }: { label: string; files: GitFile[]; column: DiffMode; tree: boolean; highlightedPaths: Set<string>; selectedPath: string | null; selectedColumn: DiffMode | null; activePath: string | null; activeColumn: DiffMode | null; onSelect: (path: string, mode: DiffMode) => void; onStage: (path: string) => void; onUnstage: (path: string) => void; onStageAll: (paths: string[]) => void; onUnstageAll: (paths: string[]) => void; onContext: (x: number, y: number, column: DiffMode, postRename: string) => void; showTt: (text: string, el: HTMLElement) => void; hideTt: () => void }) {
   const isStagedCol = column === "staged";
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const toggle = (p: string) => setCollapsed(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
@@ -1196,7 +1210,7 @@ function GitSection({ label, files, column, tree, highlightedPaths, selectedPath
   // One file row, shared by the tree and the flat list. `dirHint` (flat mode) shows the file's
   // folder dimmed after the name, VS Code-style. Right-click highlights the row (active) like hover.
   const fileRow = (e: GitFileEntry, pad: number, dirHint: string | null) => {
-    const selected = selectedPath === e.path;
+    const selected = selectedPath === e.path && selectedColumn === column;
     const active = activePath === e.path && activeColumn === column;
     const highlighted = highlightedPaths.has(e.gitPath);
     return (
@@ -1242,7 +1256,11 @@ function GitSection({ label, files, column, tree, highlightedPaths, selectedPath
 
   return (
     <div className="git-section">
-      <div className="git-section-header"><span>{label}</span><span className="git-section-count">{files.length}</span></div>
+      <div className="git-section-header">
+        <span className="git-section-label">{label}</span>
+        <span className="git-section-count">{files.length}</span>
+        <button className="git-section-action" onClick={() => (isStagedCol ? onUnstageAll : onStageAll)(entries.map(e => e.path))} onMouseEnter={(ev) => showTt(isStagedCol ? "Unstage all" : "Stage all", ev.currentTarget)} onMouseLeave={hideTt} aria-label={isStagedCol ? "Unstage all" : "Stage all"}>{isStagedCol ? <Minus size={12} /> : <Plus size={12} />}</button>
+      </div>
       {tree ? renderTree(buildGitTree(entries), 0) : flatRows}
     </div>
   );

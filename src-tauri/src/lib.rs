@@ -1591,22 +1591,22 @@ fn normalize_git_path(p: &str) -> &str {
     match p.find(" -> ") { Some(idx) => &p[idx + 4..], None => p }
 }
 
-// Unified diff for a single changed file, for the git panel's Diff tab. For untracked files we
-// show the whole file as additions (--no-index vs /dev/null). For tracked files we diff against
-// HEAD so the view captures staged AND unstaged changes together — clicking a file in either the
-// Staged or Changes section shows the complete diff. (Diffing only the clicked section was the
-// "No changes" bug: once edits were staged, the unstaged diff came back empty.) Falls back to
-// working-tree / index diffs when there's no HEAD yet (a fresh repo with no commits).
+// Unified diff for a single changed file, for the git panel's Diff tab. Mode-specific so a file
+// that is both staged and further modified shows two distinct diffs depending on the row clicked:
+//   staged    → `git diff --cached` (index vs HEAD)
+//   unstaged  → `git diff`          (working tree vs index)
+//   untracked → `git diff --no-index /dev/null <file>` (whole file as additions)
+// Runs from the repo top-level so the root-relative paths from `git status` resolve even when the
+// terminal cwd is a subdirectory. --no-ext-diff ignores external diff drivers (diff.external /
+// `.gitattributes` diff=<driver>) that would otherwise print nothing; --no-color keeps ANSI out.
 #[tauri::command]
 async fn git_diff(cwd: String, path: String, mode: String) -> Result<String, String> {
     let p = normalize_git_path(&path).to_string();
-    // Run from the repo top-level so the root-relative paths from `git status` resolve (see
-    // git_root) — otherwise a subdirectory cwd yields an empty diff and the panel shows
-    // "No changes" for every file.
     let root = git_root(&cwd);
+    let mut cmd = git_cmd(&root);
+    cmd.arg("diff").arg("--no-ext-diff").arg("--no-color");
     if mode == "untracked" {
-        let mut cmd = git_cmd(&root);
-        cmd.arg("diff").arg("--no-ext-diff").arg("--no-color").arg("--no-index").arg("--").arg("/dev/null").arg(&p);
+        cmd.arg("--no-index").arg("--").arg("/dev/null").arg(&p);
         let out = cmd.output().map_err(|e| format!("git diff failed: {}", e))?;
         // --no-index exits 1 when the two inputs differ — the normal "found a diff" signal.
         return match out.status.code() {
@@ -1614,21 +1614,11 @@ async fn git_diff(cwd: String, path: String, mode: String) -> Result<String, Str
             _ => Err(String::from_utf8_lossy(&out.stderr).into_owned()),
         };
     }
-    // --no-ext-diff: ignore external diff drivers (diff.external / `.gitattributes` diff=<driver>),
-    // which otherwise make `git diff` print nothing to stdout. --no-color keeps ANSI out of the text.
-    let run = |args: &[&str]| -> Option<String> {
-        let mut cmd = git_cmd(&root);
-        cmd.arg("diff").arg("--no-ext-diff").arg("--no-color");
-        for a in args { cmd.arg(a); }
-        cmd.arg("--").arg(&p);
-        cmd.output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-    };
-    // HEAD captures staged + unstaged together; fall back to working-tree then index diffs
-    // (e.g. a fresh repo with no commits, where `git diff HEAD` fails).
-    if let Some(d) = run(&["HEAD"]) { if !d.trim().is_empty() { return Ok(d); } }
-    if let Some(d) = run(&[]) { if !d.trim().is_empty() { return Ok(d); } }
-    if let Some(d) = run(&["--cached"]) { if !d.trim().is_empty() { return Ok(d); } }
-    Ok(String::new())
+    if mode == "staged" { cmd.arg("--cached"); }
+    cmd.arg("--").arg(&p);
+    let out = cmd.output().map_err(|e| format!("git diff failed: {}", e))?;
+    if out.status.success() { Ok(String::from_utf8_lossy(&out.stdout).into_owned()) }
+    else { Err(String::from_utf8_lossy(&out.stderr).into_owned()) }
 }
 
 #[tauri::command]
@@ -1738,19 +1728,27 @@ fn git_unstage(cwd: String, paths: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-// Discard a file's uncommitted changes. Untracked → delete the file; tracked → restore it to its
-// HEAD version (drops both staged and unstaged edits). Destructive and irreversible, so the UI
-// asks for confirmation before calling this. Runs from the repo root (root-relative paths).
+// Discard a file's changes, scoped to the section it was invoked from so it never clobbers more
+// than intended:
+//   unstaged  → `git checkout -- <path>`      (restore working tree from the INDEX — drops only
+//               the unstaged edits, keeps anything already staged)
+//   staged    → `git checkout HEAD -- <path>` (restore index + working tree to HEAD — drops the
+//               file's changes entirely)
+//   untracked → delete the file
+// Destructive and irreversible, so the UI confirms first. Runs from the repo root.
 #[tauri::command]
-async fn git_discard(cwd: String, path: String, untracked: bool) -> Result<(), String> {
+async fn git_discard(cwd: String, path: String, mode: String) -> Result<(), String> {
     let root = git_root(&cwd);
     let p = normalize_git_path(&path).to_string();
-    if untracked {
+    if mode == "untracked" {
         let full = std::path::Path::new(&root).join(&p);
         return fs::remove_file(&full).map_err(|e| format!("Failed to delete {}: {}", p, e));
     }
     let mut cmd = git_cmd(&root);
-    cmd.arg("checkout").arg("HEAD").arg("--").arg(&p);
+    cmd.arg("checkout");
+    if mode == "staged" { cmd.arg("HEAD"); } // staged: revert index + worktree to HEAD
+    // unstaged (no ref): restore the working tree from the index, leaving staged changes intact
+    cmd.arg("--").arg(&p);
     let out = cmd.output().map_err(|e| format!("git checkout failed: {}", e))?;
     if !out.status.success() { return Err(String::from_utf8_lossy(&out.stderr).to_string()); }
     Ok(())
