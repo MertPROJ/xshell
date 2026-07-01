@@ -1254,6 +1254,9 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 /* ── Loading ──────────────────────────────────────────────────────── */
 
 .loading-wrapper { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-tertiary); flex-direction: column; gap: 10px; font-size: 11px; }
+/* Boot splash — covers the whole window (over the sidebar/titlebar) and centers on the window,
+   so the startup spinner isn't shifted right by the layout. */
+.app-loading-overlay { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: var(--bg-deep); color: var(--text-tertiary); font-size: 11px; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 .spinner { width: 20px; height: 20px; border: 2px solid var(--border-default); border-top-color: var(--accent-terracotta); border-radius: 50%; animation: spin 0.8s linear infinite; }
