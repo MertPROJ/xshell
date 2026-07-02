@@ -50,6 +50,8 @@ interface SettingsViewProps {
   onSetShowSessionRowMetrics: (enabled: boolean) => void;
   showSessionRowMetricsCodex: boolean;
   onSetShowSessionRowMetricsCodex: (enabled: boolean) => void;
+  showSessionRowMetricsOpencode: boolean;
+  onSetShowSessionRowMetricsOpencode: (enabled: boolean) => void;
   showRateLimitInSidebarCodex: boolean;
   onSetShowRateLimitInSidebarCodex: (enabled: boolean) => void;
   showTerminalHeaderStats: boolean;
@@ -165,7 +167,7 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgent, gitLazyPolling, onSetGitLazyPolling, gitChangesTree, onSetGitChangesTree, fileExplorerOnStart, onSetFileExplorerOnStart, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, webglRendering, onSetWebglRendering, terminalFontWeight, onSetTerminalFontWeight, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showSessionRowMetricsCodex, onSetShowSessionRowMetricsCodex, showRateLimitInSidebarCodex, onSetShowRateLimitInSidebarCodex, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
+export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgent, gitLazyPolling, onSetGitLazyPolling, gitChangesTree, onSetGitChangesTree, fileExplorerOnStart, onSetFileExplorerOnStart, contextTreeEnabled, onSetContextTreeEnabled, terminalBgColor, onSetTerminalBgColor, defaultTerminalFontSize, onSetDefaultTerminalFontSize, alwaysOnTop, onSetAlwaysOnTop, defaultShell, onSetDefaultShell, fullscreenRendering, onSetFullscreenRendering, forceSyncOutput, onSetForceSyncOutput, webglRendering, onSetWebglRendering, terminalFontWeight, onSetTerminalFontWeight, eagerInitTabs, onSetEagerInitTabs, showRateLimitInSidebar, onSetShowRateLimitInSidebar, showSessionRowMetrics, onSetShowSessionRowMetrics, showSessionRowMetricsCodex, onSetShowSessionRowMetricsCodex, showSessionRowMetricsOpencode, onSetShowSessionRowMetricsOpencode, showRateLimitInSidebarCodex, onSetShowRateLimitInSidebarCodex, showTerminalHeaderStats, onSetShowTerminalHeaderStats, showProjectStatsChart, onSetShowProjectStatsChart, updateInfo }: SettingsViewProps) {
   const [active, setActive] = useState<Category>("appearance");
   const [wizardOpen, setWizardOpen] = useState(false);
   // Has the user run the wizard? Drives the disabled-state of the rate-limit + session-row
@@ -332,6 +334,18 @@ export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgen
               <AgentHeader icon={<AgentIcon agent="cursor" size={15} />} name={AGENTS.cursor.label} tagline={AGENTS.cursor.tagline} state={agentProbes.cursor} onRefresh={probeAgents} open={expandedAgents.cursor} onToggle={() => toggleAgent("cursor")} tt={tt} />
               {expandedAgents.cursor && <div className="settings-agent-body">
               <div className="settings-agent-empty">Cursor is integrated: its sessions appear in your project and home lists (click to resume) and its rules, instructions, and MCP servers show in the context tree. No setup needed — everything is read straight from <code>~/.cursor</code>. Cursor doesn't expose token, cost, or rate-limit data locally, so those aren't shown.</div>
+              </div>}
+              </div>
+
+              <div className="settings-agent-block">
+              <AgentHeader icon={<AgentIcon agent="opencode" size={15} />} name={AGENTS.opencode.label} tagline={AGENTS.opencode.tagline} state={agentProbes.opencode} onRefresh={probeAgents} open={expandedAgents.opencode} onToggle={() => toggleAgent("opencode")} tt={tt} />
+              {expandedAgents.opencode && <div className="settings-agent-body">
+              <div className="settings-agent-empty">opencode is integrated: its sessions appear in your project and home lists (click to resume), token usage feeds the project stats, and its instructions, commands, agents, and MCP servers show in the context tree. No setup needed — everything is read straight from opencode's local database. opencode doesn't expose rate-limit data locally, so that isn't shown.</div>
+              <Section title="Session metrics" description="opencode records usage in its local database directly — no hook or setup required, so this works out of the box.">
+                <SettingRow title="Detailed info on session rows" description="Show the context bar on each opencode session row. Model and message count always show — those are reliable from the database alone.">
+                  <Toggle checked={showSessionRowMetricsOpencode} onChange={onSetShowSessionRowMetricsOpencode} />
+                </SettingRow>
+              </Section>
               </div>}
               </div>
             </>

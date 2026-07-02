@@ -30,6 +30,7 @@ export function ProjectPicker({ allProjects, savedPaths, onToggle, onBrowse, onC
   const ref = useRef<HTMLDivElement>(null);
   const [codexProjects, setCodexProjects] = useState<CodexProjectInfo[]>([]);
   const [cursorProjects, setCursorProjects] = useState<CodexProjectInfo[]>([]);
+  const [opencodeProjects, setOpencodeProjects] = useState<CodexProjectInfo[]>([]);
   const [filter, setFilter] = useState("");
   const { tt, Tooltip } = useTooltip();
 
@@ -39,6 +40,7 @@ export function ProjectPicker({ allProjects, savedPaths, onToggle, onBrowse, onC
     onRefresh?.();
     invoke<CodexProjectInfo[]>("list_codex_projects").then(setCodexProjects).catch(() => {});
     invoke<CodexProjectInfo[]>("list_cursor_projects").then(setCursorProjects).catch(() => {});
+    invoke<CodexProjectInfo[]>("list_opencode_projects").then(setOpencodeProjects).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -71,10 +73,11 @@ export function ProjectPicker({ allProjects, savedPaths, onToggle, onBrowse, onC
     for (const p of allProjects) fold("claude", p.path, p.session_count, p.last_active);
     for (const c of codexProjects) fold("codex", c.path, c.session_count, c.last_active);
     for (const c of cursorProjects) fold("cursor", c.path, c.session_count, c.last_active);
+    for (const c of opencodeProjects) fold("opencode", c.path, c.session_count, c.last_active);
     const list = [...map.values()].sort((a, b) => b.lastActive.localeCompare(a.lastActive));
     const q = filter.trim().toLowerCase();
     return q ? list.filter(r => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q)) : list;
-  }, [allProjects, codexProjects, cursorProjects, filter]);
+  }, [allProjects, codexProjects, cursorProjects, opencodeProjects, filter]);
 
   const isChecked = (path: string) => savedPaths.some(p => normalizePath(p) === normalizePath(path));
 

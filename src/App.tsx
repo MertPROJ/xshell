@@ -109,6 +109,8 @@ export default function App() {
   // Codex's twin of session_row_metrics — independent because the data sources differ:
   // Claude row metrics need the statusline hook, Codex reads its rollout files directly.
   const [showSessionRowMetricsCodex, setShowSessionRowMetricsCodex] = useState(true);
+  // opencode's twin — its metrics come straight from opencode.db, no hook needed.
+  const [showSessionRowMetricsOpencode, setShowSessionRowMetricsOpencode] = useState(true);
   // Replaces the project path in the Claude terminal header with a cost/context strip.
   // Only takes effect when the statusline hook has populated authoritative stats for the
   // session — without it there'd be nothing to show, so the header keeps the path.
@@ -200,7 +202,7 @@ export default function App() {
     (async () => {
       try {
         const store = await load("settings.json", { defaults: {}, autoSave: true });
-        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitTree, fileExpOnStart, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender, termHeaderStats, projectStatsChart, statsView, syncOut, eagerInit, webgl, fontWeight, defAgent, rowMetricsCodex, rlSidebarCodex] = await Promise.all([
+        const [paths, icons, savedTabs, savedGroups, gitLazy, bgColor, aot, shell, ctxEnabled, defFont, gitTree, fileExpOnStart, storedLayout, rlSidebar, rowMetrics, storedTheme, fsRender, termHeaderStats, projectStatsChart, statsView, syncOut, eagerInit, webgl, fontWeight, defAgent, rowMetricsCodex, rlSidebarCodex, rowMetricsOpencode] = await Promise.all([
           store.get<string[]>("project_paths"),
           store.get<Record<string, ProjectSettings>>("project_icons"),
           store.get<Tab[]>("open_tabs"),
@@ -228,6 +230,7 @@ export default function App() {
           store.get<string>("default_agent"),
           store.get<boolean>("session_row_metrics_codex"),
           store.get<boolean>("rate_limit_in_sidebar_codex"),
+          store.get<boolean>("session_row_metrics_opencode"),
         ]);
         // Layout: prefer the explicit `sidebar_layout` if present; otherwise migrate
         // from the flat `project_paths` list by wrapping each path in a project item.
@@ -265,6 +268,7 @@ export default function App() {
         if (defAgent === "ask" || (typeof defAgent === "string" && (AGENT_IDS as string[]).includes(defAgent))) setDefaultAgent(defAgent as "ask" | AgentId);
         if (typeof rowMetricsCodex === "boolean") setShowSessionRowMetricsCodex(rowMetricsCodex);
         if (typeof rlSidebarCodex === "boolean") setShowRateLimitInSidebarCodex(rlSidebarCodex);
+        if (typeof rowMetricsOpencode === "boolean") setShowSessionRowMetricsOpencode(rowMetricsOpencode);
         // Restore only tabs that have a real sessionId (not abandoned "New Chat" tabs)
         if (savedTabs?.length) {
           const restorable = savedTabs.filter(t => t.sessionId && t.projectPath);
@@ -479,6 +483,11 @@ export default function App() {
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("session_row_metrics_codex", enabled); } catch (_) {}
   }, []);
 
+  const persistShowSessionRowMetricsOpencode = useCallback(async (enabled: boolean) => {
+    setShowSessionRowMetricsOpencode(enabled);
+    try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("session_row_metrics_opencode", enabled); } catch (_) {}
+  }, []);
+
   const persistShowTerminalHeaderStats = useCallback(async (enabled: boolean) => {
     setShowTerminalHeaderStats(enabled);
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("terminal_header_stats", enabled); } catch (_) {}
@@ -587,9 +596,12 @@ export default function App() {
   const handleSelectProject = useCallback(async (project: ProjectInfo) => {
     setSelectedProject(project);
     setActiveTabId("home");
-    if (!project.encoded_name) { setProjectSessions([]); return; }
+    // Prefer Claude's recorded encoded name; otherwise mirror the Rust encoding so projects
+    // only ever used by Codex/Cursor/opencode (no ~/.claude entry) still list their sessions.
+    const encodedName = project.encoded_name || project.path.replace(/[^a-zA-Z0-9]/g, "-");
+    if (!encodedName) { setProjectSessions([]); return; }
     setSessionsLoading(true);
-    try { setProjectSessions(await invoke<SessionInfo[]>("get_sessions", { encodedName: project.encoded_name })); } catch (_) { setProjectSessions([]); }
+    try { setProjectSessions(await invoke<SessionInfo[]>("get_sessions", { encodedName })); } catch (_) { setProjectSessions([]); }
     setSessionsLoading(false);
   }, []);
 
@@ -1126,11 +1138,11 @@ export default function App() {
       <div className="main-content">
         {/* Settings view — hidden unless activeTabId === 'settings' */}
         <div style={{ display: showSettings ? "flex" : "none", flex: 1, overflow: "hidden" }}>
-          <SettingsView theme={theme} onSetTheme={persistTheme} defaultAgent={defaultAgent} onSetDefaultAgent={persistDefaultAgent} gitLazyPolling={gitLazyPolling} onSetGitLazyPolling={persistGitLazyPolling} gitChangesTree={gitChangesTree} onSetGitChangesTree={persistGitChangesTree} fileExplorerOnStart={fileExplorerOnStart} onSetFileExplorerOnStart={persistFileExplorerOnStart} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} forceSyncOutput={forceSyncOutput} onSetForceSyncOutput={persistForceSyncOutput} webglRendering={webglRendering} onSetWebglRendering={persistWebglRendering} terminalFontWeight={terminalFontWeight} onSetTerminalFontWeight={persistTerminalFontWeight} eagerInitTabs={eagerInitTabs} onSetEagerInitTabs={persistEagerInitTabs} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} showSessionRowMetricsCodex={showSessionRowMetricsCodex} onSetShowSessionRowMetricsCodex={persistShowSessionRowMetricsCodex} showRateLimitInSidebarCodex={showRateLimitInSidebarCodex} onSetShowRateLimitInSidebarCodex={persistShowRateLimitInSidebarCodex} showTerminalHeaderStats={showTerminalHeaderStats} onSetShowTerminalHeaderStats={persistShowTerminalHeaderStats} showProjectStatsChart={showProjectStatsChart} onSetShowProjectStatsChart={persistShowProjectStatsChart} updateInfo={updateInfo} />
+          <SettingsView theme={theme} onSetTheme={persistTheme} defaultAgent={defaultAgent} onSetDefaultAgent={persistDefaultAgent} gitLazyPolling={gitLazyPolling} onSetGitLazyPolling={persistGitLazyPolling} gitChangesTree={gitChangesTree} onSetGitChangesTree={persistGitChangesTree} fileExplorerOnStart={fileExplorerOnStart} onSetFileExplorerOnStart={persistFileExplorerOnStart} contextTreeEnabled={contextTreeEnabled} onSetContextTreeEnabled={persistContextTreeEnabled} terminalBgColor={terminalBgColor} onSetTerminalBgColor={persistTerminalBgColor} defaultTerminalFontSize={defaultTerminalFontSize} onSetDefaultTerminalFontSize={persistDefaultTerminalFontSize} alwaysOnTop={alwaysOnTop} onSetAlwaysOnTop={persistAlwaysOnTop} defaultShell={defaultShell} onSetDefaultShell={persistDefaultShell} fullscreenRendering={fullscreenRendering} onSetFullscreenRendering={persistFullscreenRendering} forceSyncOutput={forceSyncOutput} onSetForceSyncOutput={persistForceSyncOutput} webglRendering={webglRendering} onSetWebglRendering={persistWebglRendering} terminalFontWeight={terminalFontWeight} onSetTerminalFontWeight={persistTerminalFontWeight} eagerInitTabs={eagerInitTabs} onSetEagerInitTabs={persistEagerInitTabs} showRateLimitInSidebar={showRateLimitInSidebar} onSetShowRateLimitInSidebar={persistShowRateLimitInSidebar} showSessionRowMetrics={showSessionRowMetrics} onSetShowSessionRowMetrics={persistShowSessionRowMetrics} showSessionRowMetricsCodex={showSessionRowMetricsCodex} onSetShowSessionRowMetricsCodex={persistShowSessionRowMetricsCodex} showSessionRowMetricsOpencode={showSessionRowMetricsOpencode} onSetShowSessionRowMetricsOpencode={persistShowSessionRowMetricsOpencode} showRateLimitInSidebarCodex={showRateLimitInSidebarCodex} onSetShowRateLimitInSidebarCodex={persistShowRateLimitInSidebarCodex} showTerminalHeaderStats={showTerminalHeaderStats} onSetShowTerminalHeaderStats={persistShowTerminalHeaderStats} showProjectStatsChart={showProjectStatsChart} onSetShowProjectStatsChart={persistShowProjectStatsChart} updateInfo={updateInfo} />
         </div>
         {/* Home view — hidden when a terminal tab is active */}
         <div style={{ display: showHome ? "flex" : "none", flex: 1, overflow: "hidden" }}>
-          <HomeView contextTreeEnabled={contextTreeEnabled} showSessionRowMetrics={showSessionRowMetrics} showSessionRowMetricsCodex={showSessionRowMetricsCodex} showProjectStatsChart={showProjectStatsChart} projects={userProjects} allProjects={allProjects} activeCountByProject={activeCountByProject} selectedProject={selectedProject} projectIcons={projectIcons} recentSessions={recentSessions} projectSessions={projectSessions} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} sessionGroupName={(() => {
+          <HomeView contextTreeEnabled={contextTreeEnabled} showSessionRowMetrics={showSessionRowMetrics} showSessionRowMetricsCodex={showSessionRowMetricsCodex} showSessionRowMetricsOpencode={showSessionRowMetricsOpencode} showProjectStatsChart={showProjectStatsChart} projects={userProjects} allProjects={allProjects} activeCountByProject={activeCountByProject} selectedProject={selectedProject} projectIcons={projectIcons} recentSessions={recentSessions} projectSessions={projectSessions} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} sessionGroupName={(() => {
             const map: Record<string, string> = {};
             for (const t of tabs) {
               if (t.sessionId && t.groupId) {

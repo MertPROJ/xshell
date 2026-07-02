@@ -317,10 +317,12 @@ input, textarea, [contenteditable="true"], .xterm, .xterm *, .selectable { user-
 /* Minimal agent tint — a faint smoke plume in the tab's top-right corner: terracotta for
    Claude tabs, off-white for Codex (color-mix so it stays visible on the light theme).
    Pseudo-element overlay so the tab's own background/hover transitions stay untouched. */
-.tab-agent-claude::after, .tab-agent-codex::after, .tab-agent-cursor::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
+.tab-agent-claude::after, .tab-agent-codex::after, .tab-agent-cursor::after, .tab-agent-opencode::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
 .tab-agent-claude::after { background: radial-gradient(45% 160% at 100% 50%, rgba(201, 100, 66, 0.17), transparent 65%); }
 .tab-agent-codex::after { background: radial-gradient(45% 160% at 100% 50%, color-mix(in oklab, var(--text-primary) 13%, transparent), transparent 65%); }
 .tab-agent-cursor::after { background: radial-gradient(45% 160% at 100% 50%, rgba(94, 134, 214, 0.17), transparent 65%); }
+/* opencode's mark is monochrome like Codex's — a slightly weaker neutral plume keeps the two apart without inventing a brand color. */
+.tab-agent-opencode::after { background: radial-gradient(45% 160% at 100% 50%, color-mix(in oklab, var(--text-primary) 9%, transparent), transparent 65%); }
 .tab-item-close:hover { opacity: 1 !important; background: var(--bg-active); color: var(--text-primary); }
 
 /* Small thin tooltip for tabs */

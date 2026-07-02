@@ -25,6 +25,7 @@ interface HomeViewProps {
   contextTreeEnabled: boolean;
   showSessionRowMetrics: boolean;
   showSessionRowMetricsCodex: boolean;
+  showSessionRowMetricsOpencode: boolean;
   showProjectStatsChart: boolean;
   projectStatsView: 'cost' | 'tokens';
   onChangeProjectStatsView: (view: 'cost' | 'tokens') => void;
@@ -615,7 +616,7 @@ function filterSessions(sessions: SessionInfo[], query: string): SessionInfo[] {
   return sessions.filter(s => s.title.toLowerCase().includes(q) || s.project_name.toLowerCase().includes(q) || s.git_branch.toLowerCase().includes(q));
 }
 
-export function HomeView({ projects, activeCountByProject, selectedProject, projectIcons, recentSessions, projectSessions, openSessionIds, sessionGroupName, loading, sessionsLoading, contextTreeEnabled, showSessionRowMetrics, showSessionRowMetricsCodex, showProjectStatsChart, projectStatsView, onChangeProjectStatsView, onOpenSession, onOpenSessionBackground, onSelectProject, onNewChat, onAddProject, onRemoveProject, onEditProject, onSaveFolders }: HomeViewProps) {
+export function HomeView({ projects, activeCountByProject, selectedProject, projectIcons, recentSessions, projectSessions, openSessionIds, sessionGroupName, loading, sessionsLoading, contextTreeEnabled, showSessionRowMetrics, showSessionRowMetricsCodex, showSessionRowMetricsOpencode, showProjectStatsChart, projectStatsView, onChangeProjectStatsView, onOpenSession, onOpenSessionBackground, onSelectProject, onNewChat, onAddProject, onRemoveProject, onEditProject, onSaveFolders }: HomeViewProps) {
   const [search, setSearch] = useState("");
   // Scroll-driven collapse of the stats strip in the project detail view. Same UX the old
   // preview cards had: scroll down → strip slides up out of view; pull back up at the very
@@ -656,9 +657,9 @@ export function HomeView({ projects, activeCountByProject, selectedProject, proj
   // projects; the overflow hides behind a "+N more" toggle.
   const [showAllProjects, setShowAllProjects] = useState(false);
 
-  // Row metrics are toggled per agent: Claude's setting is hook-gated, Codex's reads
-  // rollout files directly — each session row follows its own agent's toggle.
-  const metricsForSession = (s: SessionInfo) => s.agent === "codex" ? showSessionRowMetricsCodex : showSessionRowMetrics;
+  // Row metrics are toggled per agent: Claude's setting is hook-gated, Codex's and
+  // opencode's read their own files directly — each session row follows its agent's toggle.
+  const metricsForSession = (s: SessionInfo) => s.agent === "codex" ? showSessionRowMetricsCodex : s.agent === "opencode" ? showSessionRowMetricsOpencode : showSessionRowMetrics;
 
   // Live-read folders for the selected project. A new array identity only when it actually changes.
   const folders: SessionFolder[] = useMemo(() => {
@@ -937,7 +938,7 @@ export function HomeView({ projects, activeCountByProject, selectedProject, proj
           );
         })()}
         </div>
-        {contextTreeEnabled && <SkillsPanel projectPath={selectedProject.path} projectName={projectIcons[selectedProject.path.toLowerCase()]?.customName || selectedProject.name} agentPresence={{ claude: projectSessions.some(s => s.agent === "claude"), codex: projectSessions.some(s => s.agent === "codex"), cursor: projectSessions.some(s => s.agent === "cursor") }} />}
+        {contextTreeEnabled && <SkillsPanel projectPath={selectedProject.path} projectName={projectIcons[selectedProject.path.toLowerCase()]?.customName || selectedProject.name} agentPresence={{ claude: projectSessions.some(s => s.agent === "claude"), codex: projectSessions.some(s => s.agent === "codex"), cursor: projectSessions.some(s => s.agent === "cursor"), opencode: projectSessions.some(s => s.agent === "opencode") }} />}
       </div>
     );
   }

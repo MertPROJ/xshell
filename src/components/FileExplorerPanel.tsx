@@ -6,8 +6,8 @@ import { AgentIcon, type AgentId } from "../agents";
 import { fileIconUrl, folderIconUrl } from "../lib/fileIcons";
 
 // Agent config folders get their brand icon instead of a generic folder — a little flourish
-// so `.claude` / `.codex` / `.cursor` are recognizable at a glance. Matched by exact name.
-const AGENT_DIRS: Record<string, AgentId> = { ".claude": "claude", ".codex": "codex", ".cursor": "cursor" };
+// so `.claude` / `.codex` / `.cursor` / `.opencode` are recognizable at a glance. Matched by exact name.
+const AGENT_DIRS: Record<string, AgentId> = { ".claude": "claude", ".codex": "codex", ".cursor": "cursor", ".opencode": "opencode" };
 function agentForDir(item: DirItem): AgentId | null { return item.is_dir ? (AGENT_DIRS[item.name.toLowerCase()] ?? null) : null; }
 
 // Hover-tooltip delay for tree rows — they shouldn't pop the instant the cursor crosses a
