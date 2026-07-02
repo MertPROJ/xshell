@@ -91,17 +91,20 @@ function formatModel(raw: string): string {
   if (m.startsWith("composer")) { const v = m.match(/composer-([\d.]+)/); return v ? `Composer ${v[1]}` : "Composer"; }
   // Codex model ids are already short ("gpt-5.5") — just capitalize the family prefix.
   if (m.startsWith("gpt")) return raw.replace(/^gpt/i, "GPT");
+  // Antigravity's Gemini ids ("gemini-3.5-flash-low" → "Gemini 3.5 Flash Low").
+  if (m.startsWith("gemini")) return m.split("-").map(part => /^\d/.test(part) ? part : part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
   return raw;
 }
 
 // Tier class used for color-coding the model badge — "opus" stands out, "haiku" recedes.
-function modelTier(raw: string): "opus" | "sonnet" | "haiku" | "gpt" | "cursor" | "unknown" {
+function modelTier(raw: string): "opus" | "sonnet" | "haiku" | "gpt" | "cursor" | "gemini" | "unknown" {
   const m = raw.toLowerCase();
   if (m.includes("opus")) return "opus";
   if (m.includes("haiku")) return "haiku";
   if (m.includes("sonnet")) return "sonnet";
   if (m.startsWith("composer")) return "cursor";
   if (m.startsWith("gpt") || m.includes("codex")) return "gpt";
+  if (m.startsWith("gemini")) return "gemini";
   return "unknown";
 }
 
@@ -938,7 +941,7 @@ export function HomeView({ projects, activeCountByProject, selectedProject, proj
           );
         })()}
         </div>
-        {contextTreeEnabled && <SkillsPanel projectPath={selectedProject.path} projectName={projectIcons[selectedProject.path.toLowerCase()]?.customName || selectedProject.name} agentPresence={{ claude: projectSessions.some(s => s.agent === "claude"), codex: projectSessions.some(s => s.agent === "codex"), cursor: projectSessions.some(s => s.agent === "cursor"), opencode: projectSessions.some(s => s.agent === "opencode") }} />}
+        {contextTreeEnabled && <SkillsPanel projectPath={selectedProject.path} projectName={projectIcons[selectedProject.path.toLowerCase()]?.customName || selectedProject.name} agentPresence={{ claude: projectSessions.some(s => s.agent === "claude"), codex: projectSessions.some(s => s.agent === "codex"), cursor: projectSessions.some(s => s.agent === "cursor"), opencode: projectSessions.some(s => s.agent === "opencode"), antigravity: projectSessions.some(s => s.agent === "antigravity") }} />}
       </div>
     );
   }

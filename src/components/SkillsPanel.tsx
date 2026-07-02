@@ -1,7 +1,7 @@
 import { useEffect, useState, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Network, User, FolderTree, Puzzle, ChevronRight, Plug, Globe, Terminal as TerminalIcon, Wand2, FolderOpen, Sparkles, Brain, Bot, Slash, Zap, FileText, Layers } from "lucide-react";
-import type { ProjectSkills, Skill, Plugin, McpInfo, ProjectMemories, Memory, SubagentInfo, SlashCommand, HookEntry, ClaudeMdFile, SettingsSource, CodexContext, CursorContext, OpencodeContext, AgentContextSection } from "../types";
+import type { ProjectSkills, Skill, Plugin, McpInfo, ProjectMemories, Memory, SubagentInfo, SlashCommand, HookEntry, ClaudeMdFile, SettingsSource, CodexContext, CursorContext, OpencodeContext, AntigravityContext, AgentContextSection } from "../types";
 import { useTooltip, useTt, ttProps, TooltipProvider } from "./Tooltip";
 import { MarkdownDialog } from "./MarkdownDialog";
 import { AGENTS, AgentIcon } from "../agents";
@@ -11,7 +11,7 @@ interface Props {
   projectName: string;
   // Which agents have sessions in this project — part of the root-section gating (a pure
   // Codex/Cursor project hides the Claude roots and vice versa; see visibility rules below).
-  agentPresence?: { claude: boolean; codex: boolean; cursor: boolean; opencode: boolean };
+  agentPresence?: { claude: boolean; codex: boolean; cursor: boolean; opencode: boolean; antigravity: boolean };
 }
 
 function revealFolder(path: string) { invoke("reveal_in_explorer", { path }).catch(() => {}); }
@@ -429,6 +429,7 @@ export function SkillsPanel({ projectPath, projectName, agentPresence }: Props) 
   const [codexCtx, setCodexCtx] = useState<CodexContext | null>(null);
   const [cursorCtx, setCursorCtx] = useState<CursorContext | null>(null);
   const [opencodeCtx, setOpencodeCtx] = useState<OpencodeContext | null>(null);
+  const [antigravityCtx, setAntigravityCtx] = useState<AntigravityContext | null>(null);
   const [memories, setMemories] = useState<ProjectMemories>({ dir: "", items: [] });
   const [loading, setLoading] = useState(false);
   const [username, setUsername] = useState("user");
@@ -477,6 +478,12 @@ export function SkillsPanel({ projectPath, projectName, agentPresence }: Props) 
       console.error("[SkillsPanel] opencode context error:", e);
       setOpencodeCtx(null);
     }
+    try {
+      setAntigravityCtx(await invoke<AntigravityContext>("get_antigravity_context", { projectPath }));
+    } catch (e) {
+      console.error("[SkillsPanel] antigravity context error:", e);
+      setAntigravityCtx(null);
+    }
   };
   useEffect(() => { fetchData(); /* eslint-disable-next-line */ }, [projectPath]);
 
@@ -510,11 +517,12 @@ export function SkillsPanel({ projectPath, projectName, agentPresence }: Props) 
   const codexVisible = (codexCtx?.sections.length ?? 0) > 0;
   const cursorVisible = (cursorCtx?.sections.length ?? 0) > 0;
   const opencodeVisible = (opencodeCtx?.sections.length ?? 0) > 0;
+  const antigravityVisible = (antigravityCtx?.sections.length ?? 0) > 0;
   let claudeVisible = claudeContentCount + memories.items.length > 0 || !!agentPresence?.claude;
-  if (!claudeVisible && !codexVisible && !cursorVisible && !opencodeVisible) claudeVisible = true;
+  if (!claudeVisible && !codexVisible && !cursorVisible && !opencodeVisible && !antigravityVisible) claudeVisible = true;
   // When Claude shares the tree with another agent, its roots name their agent in the hint
   // so the grouping is unambiguous; single-agent trees stay free of agent labels.
-  const claudeHintSuffix = claudeVisible && (codexVisible || cursorVisible || opencodeVisible) ? ` · ${AGENTS.claude.label}` : "";
+  const claudeHintSuffix = claudeVisible && (codexVisible || cursorVisible || opencodeVisible || antigravityVisible) ? ` · ${AGENTS.claude.label}` : "";
 
   return (
     <TooltipProvider tt={tt}>
@@ -592,6 +600,15 @@ export function SkillsPanel({ projectPath, projectName, agentPresence }: Props) 
                 icon={<AgentIcon agent="opencode" size={12} className="tn-agent-icon-neutral" />}
                 trustLevel={null}
                 sections={opencodeCtx.sections}
+                onOpenDoc={(path, title) => setOpenDoc({ path, title })}
+              />
+            )}
+            {antigravityVisible && antigravityCtx && (
+              <AgentContextRoot
+                title={AGENTS.antigravity.label}
+                icon={<AgentIcon agent="antigravity" size={12} />}
+                trustLevel={null}
+                sections={antigravityCtx.sections}
                 onOpenDoc={(path, title) => setOpenDoc({ path, title })}
               />
             )}
