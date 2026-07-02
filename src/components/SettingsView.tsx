@@ -348,6 +348,13 @@ export function SettingsView({ theme, onSetTheme, defaultAgent, onSetDefaultAgen
               </Section>
               </div>}
               </div>
+
+              <div className="settings-agent-block">
+              <AgentHeader icon={<AgentIcon agent="antigravity" size={15} />} name={AGENTS.antigravity.label} tagline={AGENTS.antigravity.tagline} state={agentProbes.antigravity} onRefresh={probeAgents} open={expandedAgents.antigravity} onToggle={() => toggleAgent("antigravity")} tt={tt} />
+              {expandedAgents.antigravity && <div className="settings-agent-body">
+              <div className="settings-agent-empty">Antigravity is integrated: its conversations appear in your project and home lists (click to resume via <code>agy --conversation</code>) and its skills, rules, plugins, and MCP servers show in the context tree. No setup needed — everything is read straight from <code>~/.gemini</code>. Antigravity doesn't expose token, cost, or rate-limit data locally (usage lives in its cloud AI Credits), so those aren't shown.</div>
+              </div>}
+              </div>
             </>
           )}
 
