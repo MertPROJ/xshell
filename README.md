@@ -14,7 +14,7 @@
 
 </div>
 
-> Independent project. Not affiliated with, endorsed by, or a product of Anthropic. xshell reads files written by the official `claude` CLI and spawns it as a subprocess. "Claude" and "Claude Code" are trademarks of Anthropic, PBC.
+> Independent project. Not affiliated with, endorsed by, or a product of Anthropic, OpenAI, Anysphere, Google, or any other agent vendor. xshell reads the session files written by the official agent CLIs (`claude`, `codex`, `cursor-agent`, `opencode`, `agy`) and spawns them as subprocesses. All product names, logos, and brands are trademarks of their respective owners.
 
 ## Preview
 
@@ -28,9 +28,9 @@
 
 ## Why this exists
 
-Open terminal. `cd` somewhere. Type `claude`. Repeat for every project, every day.
+Open terminal. `cd` somewhere. Type `claude` — or `codex`, or `agy`. Repeat for every project, every day.
 
-xshell skips that. All your projects, all your past sessions, all the costs — one screen, one click.
+xshell skips that. All your agents, all your projects, all your past sessions, all the costs — one screen, one click.
 
 ## How it works
 
@@ -38,9 +38,9 @@ xshell reads the session files each agent CLI writes to disk (`~/.claude/`, `~/.
 
 ## What you see
 
-Every project on your machine that Claude Code has touched. Every session, sorted by what you opened last. Cost per session, per project, per day.
+Every project on your machine that any of your agents has touched. Every session, sorted by what you opened last. Cost and token usage per session, per project, per day — wherever the agent records it.
 
-The data is all in `~/.claude/` already. xshell just shows it in one place.
+The data is all on your disk already. xshell just shows it in one place.
 
 ## Supported agents
 
@@ -58,7 +58,7 @@ More agents are on the way — the registry is built to grow.
 
 ## Features
 
-- 🗂️ **Sidebar with every project** Claude Code has touched. Pin, group, drag-and-drop.
+- 🗂️ **Sidebar with every project** your agents have touched. Pin, group, drag-and-drop.
 - 📜 **One-click session resume** with full history per project.
 - 💻 **Real terminals**, splittable side-by-side. [xterm.js](https://xtermjs.org) + native PTYs.
 - 🌿 **Live branch and worktree awareness** in the sidebar.
@@ -104,4 +104,4 @@ Issues and pull requests welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for d
 
 [MIT](./LICENSE) © 2026 xshell Contributors
 
-xshell is independent software. It reads files written by Anthropic's `claude` CLI and runs `claude` as a subprocess. "Claude" and "Claude Code" are trademarks of Anthropic, PBC.
+xshell is independent software. It reads the session files written by the official agent CLIs and runs them as subprocesses. All product names, logos, and brands are trademarks of their respective owners.
