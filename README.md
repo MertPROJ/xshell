@@ -4,7 +4,7 @@
 
 # xshell
 
-**A native home for your Claude Code sessions.**
+**A tiny IDE for your AI CLI agents.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?labelColor=1a1a1a)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-7aa2f7?labelColor=1a1a1a)](https://github.com/MertPROJ/xshell/releases/latest)
