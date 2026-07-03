@@ -19,7 +19,7 @@
 ## Preview
 
 <p align="center">
-  <img src="docs/xshell-demo.gif" alt="xshell demo" width="100%">
+  <img src="docs/app-demo.png" alt="xshell running a Claude Code session — project tabs, sidebar, terminal, and git panel side by side" width="100%">
 </p>
 
 <p align="center">
@@ -34,13 +34,27 @@ xshell skips that. All your projects, all your past sessions, all the costs — 
 
 ## How it works
 
-xshell reads the files Claude Code writes to `~/.claude/` and spawns the `claude` CLI when you start a session. No API proxy, no telemetry, no replacement implementation. If Claude Code works on your machine, xshell works.
+xshell reads the session files each agent CLI writes to disk (`~/.claude/`, `~/.codex/`, and so on) and spawns the official CLI when you start or resume a session. No API proxy, no telemetry, no replacement implementation. If an agent CLI works on your machine, xshell works.
 
 ## What you see
 
 Every project on your machine that Claude Code has touched. Every session, sorted by what you opened last. Cost per session, per project, per day.
 
 The data is all in `~/.claude/` already. xshell just shows it in one place.
+
+## Supported agents
+
+xshell auto-detects whichever of these agent CLIs are installed and lists their projects and sessions — no setup needed. Only the agents you actually have show up in the UI.
+
+| Agent | Binary | Sessions read from | Extras |
+| --- | --- | --- | --- |
+| **Claude Code** | `claude` | `~/.claude/projects` | Cost, context %, rate limits, context tree |
+| **Codex** | `codex` | `~/.codex/sessions` | Tokens, context %, rate limits, context tree |
+| **Cursor** | `cursor-agent` | `~/.cursor/chats` | Context tree |
+| **opencode** | `opencode` | opencode's local database | Tokens, context %, context tree |
+| **Antigravity** | `agy` | `~/.gemini/antigravity-cli` | Context tree |
+
+More agents are on the way — the registry is built to grow.
 
 ## Features
 
@@ -80,7 +94,7 @@ The script downloads the right binary for your platform from the [latest GitHub 
 | macOS | `xshell_<version>_universal.dmg` |
 | Linux | `xshell_<version>_amd64.deb`, `xshell-<version>-1.x86_64.rpm`, or `xshell_<version>_amd64.AppImage` |
 
-The `claude` CLI must be installed and on `PATH`.
+At least one [supported agent CLI](#supported-agents) must be installed and on `PATH`.
 
 ## Contributing
 
