@@ -4,11 +4,14 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 use tauri::ipc::{Channel, Response};
 use tauri::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::response::IntoResponse;
+use futures_util::{SinkExt, StreamExt};
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -74,7 +77,10 @@ struct TerminalHandle {
 }
 
 pub struct AppState {
-    terminals: Mutex<HashMap<String, TerminalHandle>>,
+    // Arc so the phone-remote server (a separate runtime thread) can hold a clone of the same
+    // map and write to the very PTYs the desktop UI is driving. All Tauri command call sites
+    // keep using `state.terminals.lock()` unchanged — Arc derefs to the Mutex.
+    terminals: Arc<Mutex<HashMap<String, TerminalHandle>>>,
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -2069,6 +2075,7 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
     // exit never races ahead of the final output chunk.
     let pending_f = pending;
     let done_f = done;
+    let host_id = id.clone();
     std::thread::spawn(move || {
         let (lock, cv) = &*pending_f;
         loop {
@@ -2087,6 +2094,22 @@ fn spawn_terminal(state: State<'_, AppState>, id: String, session_id: Option<Str
             let chunk = std::mem::take(&mut *lock.lock().unwrap());
             if chunk.is_empty() {
                 continue;
+            }
+            // Fan out to any phone-remote viewers. The atomic gate keeps the common
+            // (not-hosting) path free of the global lock — the registry is only touched
+            // while a hosting session is live. A bounded ring keeps recent output so a
+            // viewer attaching mid-session gets the current screen replayed on connect.
+            if HOSTED_TERMINALS.load(Ordering::Relaxed) > 0 {
+                if let Ok(reg) = host_registry().lock() {
+                    if let Some(h) = reg.get(&host_id) {
+                        let _ = h.tx.send(HostMsg::Data(chunk.clone()));
+                        if let Ok(mut ring) = h.ring.lock() {
+                            ring.extend_from_slice(&chunk);
+                            let overflow = ring.len().saturating_sub(HOST_RING_MAX);
+                            if overflow > 0 { ring.drain(0..overflow); }
+                        }
+                    }
+                }
             }
             if on_data.send(Response::new(chunk)).is_err() {
                 break;
@@ -2113,6 +2136,16 @@ fn resize_terminal(state: State<'_, AppState>, id: String, cols: u16, rows: u16)
     let terminals = state.terminals.lock().unwrap();
     if let Some(handle) = terminals.get(&id) {
         handle.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| format!("Resize failed: {}", e))?;
+    }
+    drop(terminals);
+    // Keep phone viewers in sync: the app owns the grid, viewers scale their render to it.
+    if HOSTED_TERMINALS.load(Ordering::Relaxed) > 0 {
+        if let Ok(reg) = host_registry().lock() {
+            if let Some(h) = reg.get(&id) {
+                if let Ok(mut sz) = h.size.lock() { *sz = (cols, rows); }
+                let _ = h.tx.send(HostMsg::Size(cols, rows));
+            }
+        }
     }
     Ok(())
 }
@@ -3255,6 +3288,603 @@ async fn detect_agent_binary(binary: String) -> Result<AgentBinaryProbe, String>
     Ok(AgentBinaryProbe { installed: true, path: Some(path), version })
 }
 
+// ── Phone remote (web hosting) ────────────────────────────────────────
+// Control the open terminal tabs from a phone browser on the same network. `start_hosting_session`
+// lazily boots a single in-process axum server on its own tokio runtime thread and exposes ONE
+// session URL (http://<lan-ip>:<port>/s/<uuid>) covering every terminal tab; the desktop keeps the
+// hosted tab list in sync as tabs open/close. A viewer scans the QR from the host dialog, enters
+// the 4-digit code, and gets a tab strip + interactive xterm.js: switching chips re-attaches the
+// socket to another PTY, keystrokes flow back into the very PTY the desktop UI is driving.
+//
+// SECURITY NOTE: this is a remote shell. The defence today is (a) the session id in the URL is an
+// unguessable UUID minted per hosting session and (b) a 4-digit code with a 5-attempt cap per
+// socket. That is adequate for a same-network remote, NOT for public exposure — no TLS, no
+// cross-socket rate limit. Harden before relaying this through xshell.sh.
+
+const XSHELL_HOST_PORT: u16 = 8421;
+const HOST_RING_MAX: usize = 256 * 1024;
+// Gate for the PTY flusher fan-out: number of terminals currently registered for hosting.
+static HOSTED_TERMINALS: AtomicUsize = AtomicUsize::new(0);
+static HOST_SERVER_PORT: OnceLock<u16> = OnceLock::new();
+// Clone of AppState.terminals, stashed on first host so the server thread can reach the PTYs.
+static HOST_TERMINALS: OnceLock<Arc<Mutex<HashMap<String, TerminalHandle>>>> = OnceLock::new();
+
+// Broadcast item per terminal: raw PTY bytes (→ WS Binary) or a grid-size change (→ WS Text).
+// One channel keeps output and size strictly ordered, so a viewer resizes at the right point.
+#[derive(Clone)]
+enum HostMsg {
+    Data(Vec<u8>),
+    Size(u16, u16),
+}
+
+// Fan-out state for one hosted terminal. The ring holds recent output so a viewer attaching
+// mid-session gets the current screen replayed before the live stream continues.
+struct HostedTerminal {
+    tx: tokio::sync::broadcast::Sender<HostMsg>,
+    ring: Arc<Mutex<Vec<u8>>>,
+    size: Arc<Mutex<(u16, u16)>>,
+}
+
+fn host_registry() -> &'static Mutex<HashMap<String, HostedTerminal>> {
+    static R: OnceLock<Mutex<HashMap<String, HostedTerminal>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+// One tab entry as the phone sees it — pushed by the desktop whenever tabs change.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HostedTabMeta {
+    pub id: String,    // terminal id == tab id (what spawn_terminal registered)
+    pub title: String,
+    pub agent: String, // registry id ("claude", "codex", …) or "shell" — colors the chip dot
+}
+
+// The single active hosting session. Global (not Tauri-managed) because the axum handlers run
+// outside Tauri's state system.
+struct HostSession {
+    session_id: String,
+    pin: String,
+    read_only: Arc<AtomicBool>,
+    tabs: Mutex<Vec<HostedTabMeta>>,
+    // Pre-serialized JSON control events (tabs updates, read-only toggles, session stop) fanned
+    // out to every connected viewer regardless of which terminal it is attached to.
+    events: tokio::sync::broadcast::Sender<String>,
+}
+
+fn host_session_slot() -> &'static Mutex<Option<Arc<HostSession>>> {
+    static S: OnceLock<Mutex<Option<Arc<HostSession>>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(None))
+}
+
+// Serve the SAME bundled JetBrains Mono the desktop uses, so the viewer renders the agents'
+// logos / box-drawing / glyphs at the right metrics instead of a generic system monospace.
+const FONT_REGULAR: &[u8] = include_bytes!("../../src/assets/fonts/JetBrainsMono-Regular.woff2");
+const FONT_BOLD: &[u8] = include_bytes!("../../src/assets/fonts/JetBrainsMono-Bold.woff2");
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HostSessionInfo {
+    pub session_id: String,
+    pub url: String,
+    pub pin: String,
+    pub port: u16,
+    pub read_only: bool,
+    pub qr_svg: String,
+}
+
+// Self-contained phone client. Mirrors the desktop TerminalTab xterm config so the web render
+// matches the app (WebGL renderer, Unicode 11 widths, bundled JetBrains Mono, brand palette).
+// Layout is mobile-first: tab chips on top, letterboxed terminal in the middle (the app owns the
+// grid; the phone scales the FONT to fit), a composer bar with quick keys at the bottom so soft
+// keyboards work well. xterm core + addons load from jsdelivr (our own server, no Tauri CSP).
+const HOST_PAGE_HTML: &str = r##"<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>xshell remote</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.min.js"></script>
+<style>
+  @font-face { font-family:"JetBrains Mono"; font-weight:400; font-style:normal; font-display:block; src:url("/fonts/JetBrainsMono-Regular.woff2") format("woff2"); }
+  @font-face { font-family:"JetBrains Mono"; font-weight:700; font-style:normal; font-display:block; src:url("/fonts/JetBrainsMono-Bold.woff2") format("woff2"); }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100dvh;background:#1c1c1b;color:#faf9f5;font-family:"JetBrains Mono",Consolas,Menlo,monospace;overscroll-behavior:none;touch-action:manipulation}
+  #app{display:flex;flex-direction:column;height:100dvh}
+  /* Tab strip — one chip per hosted terminal tab, horizontally scrollable. */
+  #tabs{display:flex;gap:6px;align-items:center;padding:8px 10px calc(8px);overflow-x:auto;flex:none;background:#141413;border-bottom:1px solid #3a3a38;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  #tabs::-webkit-scrollbar{display:none}
+  .chip{flex:none;display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px;border:1px solid #3a3a38;background:#1c1c1b;color:#b0aea5;font-size:12px;font-weight:600;font-family:inherit;max-width:60vw;cursor:pointer}
+  .chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip .dot{width:7px;height:7px;border-radius:99px;flex:none}
+  .chip.active{border-color:#c96442;background:rgba(201,100,66,.12);color:#faf9f5}
+  #brand{flex:none;font-size:12px;font-weight:700;letter-spacing:.02em;color:#faf9f5;padding-right:4px}
+  #brand em{color:#c96442;font-style:normal}
+  /* Letterboxed terminal — the app owns the grid, we scale the font to fit. */
+  #wrap{position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;min-height:0}
+  #empty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;color:#5e5d59;font-size:13px;text-align:center;padding:0 24px}
+  #ro{position:absolute;top:8px;right:10px;z-index:8;display:none;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;background:rgba(90,176,240,.16);border:1px solid rgba(90,176,240,.4);color:#9cd2ff;font-size:11px;font-weight:600}
+  /* Composer — quick keys + text input tuned for soft keyboards. */
+  #composer{flex:none;background:#141413;border-top:1px solid #3a3a38;padding:7px 10px calc(7px + env(safe-area-inset-bottom))}
+  #keys{display:flex;gap:5px;overflow-x:auto;padding-bottom:7px;scrollbar-width:none}
+  #keys::-webkit-scrollbar{display:none}
+  .k{flex:none;padding:6px 11px;border-radius:7px;border:1px solid #3a3a38;background:#1c1c1b;color:#b0aea5;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer}
+  .k:active{background:#30302e;color:#faf9f5}
+  #row{display:flex;gap:7px}
+  #inp{flex:1;min-width:0;padding:10px 12px;border-radius:9px;border:1px solid #3a3a38;background:#1c1c1b;color:#faf9f5;font-size:16px;font-family:inherit;outline:none}
+  #inp:focus{border-color:#c96442}
+  #send{flex:none;padding:0 18px;border:none;border-radius:9px;background:#c96442;color:#fff;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
+  /* PIN gate + disconnect overlay */
+  .overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(20,20,19,.94);z-index:10}
+  .overlay h1{font-size:15px;font-weight:600;margin:0}
+  .overlay p{margin:0;font-size:12px;color:#b0aea5;text-align:center;padding:0 24px}
+  #pin{width:170px;text-align:center;font-size:28px;letter-spacing:.5em;padding:10px;border-radius:8px;border:1px solid #5e5d59;background:#141413;color:#faf9f5;outline:none;font-family:inherit}
+  #pin:focus{border-color:#c96442}
+  .btn{padding:9px 22px;border:none;border-radius:8px;background:#c96442;color:#fff;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer}
+  #err{color:#d97757;font-size:12px;min-height:14px}
+  #dead{display:none}
+</style></head>
+<body>
+  <div id="app">
+    <div id="tabs"><span id="brand">x<em>shell</em></span></div>
+    <div id="wrap"><div id="term"></div><div id="empty">No terminal tabs are open in the app right now.</div><div id="ro">● View only</div></div>
+    <div id="composer">
+      <div id="keys"></div>
+      <div id="row"><input id="inp" placeholder="Type a prompt…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"><button id="send">Send</button></div>
+    </div>
+  </div>
+  <div class="overlay" id="gate">
+    <h1>xshell remote</h1>
+    <p>Enter the 4-digit code shown in the app</p>
+    <input id="pin" inputmode="numeric" maxlength="4" placeholder="••••" autofocus>
+    <button class="btn" id="go">Connect</button>
+    <div id="err"></div>
+  </div>
+  <div class="overlay" id="dead">
+    <h1>Disconnected</h1>
+    <p id="deadWhy">The hosting session ended or the connection dropped.</p>
+    <button class="btn" onclick="location.reload()">Reconnect</button>
+  </div>
+<script>
+  var PALETTE = {
+    background:"#1c1c1b", foreground:"#faf9f5", cursor:"#c96442", cursorAccent:"#141413",
+    selectionBackground:"rgba(201,100,66,0.3)", selectionForeground:"#faf9f5",
+    black:"#30302e", red:"#b53333", green:"#4a9968", yellow:"#c96442", blue:"#3898ec",
+    magenta:"#9a6dd7", cyan:"#4a9999", white:"#b0aea5",
+    brightBlack:"#5e5d59", brightRed:"#d97757", brightGreen:"#6cc088", brightYellow:"#d97757",
+    brightBlue:"#5ab0f0", brightMagenta:"#b088e0", brightCyan:"#6cc0c0", brightWhite:"#faf9f5"
+  };
+  var AGENT_DOT = { claude:"#c96442", codex:"#b0aea5", cursor:"#5e86d6", opencode:"#d5d3cc", antigravity:"#4285f4", shell:"#6cc088" };
+  var session = location.pathname.split('/').pop();
+  var proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  var ws = new WebSocket(proto + '://' + location.host + '/ws/' + session);
+  ws.binaryType = 'arraybuffer';
+
+  var term = new Terminal({
+    theme: PALETTE,
+    fontFamily: '"JetBrains Mono", Consolas, "Cascadia Mono", Menlo, monospace',
+    fontSize: 14, fontWeight: 300, fontWeightBold: 500,
+    cursorBlink: false, cursorStyle: 'bar', cursorInactiveStyle: 'outline',
+    scrollback: 5000, allowProposedApi: true, minimumContrastRatio: 1
+  });
+  term.loadAddon(new Unicode11Addon.Unicode11Addon());
+  term.unicode.activeVersion = '11';
+  term.open(document.getElementById('term'));
+  try { var gl = new WebglAddon.WebglAddon(); gl.onContextLoss(function(){ gl.dispose(); }); term.loadAddon(gl); } catch(e){}
+  var fontsReady = (document.fonts && document.fonts.load)
+    ? Promise.allSettled([document.fonts.load('400 14px "JetBrains Mono"'), document.fonts.load('700 14px "JetBrains Mono"')])
+    : Promise.resolve();
+
+  var authed = false, readOnly = false, activeId = null, tabs = [], enc = new TextEncoder();
+  var hostCols = 0, hostRows = 0;
+
+  function screenEl(){ return term.element && term.element.querySelector('.xterm-screen'); }
+  // Render the host's fixed grid and scale the FONT so it fills the box — letterboxed, never
+  // clipped, and resizing the phone/keyboard never touches the PTY.
+  function fitFollow(){
+    if (!hostCols || !hostRows) return;
+    if (term.cols !== hostCols || term.rows !== hostRows) { try { term.resize(hostCols, hostRows); } catch(e){} }
+    var box = document.getElementById('wrap');
+    var vw = box.clientWidth - 8, vh = box.clientHeight - 8;
+    var s = screenEl(); if (!s || !s.offsetWidth) return;
+    var cw = s.offsetWidth / term.cols, ch = s.offsetHeight / term.rows;
+    var f = Math.max(4, Math.min(28, Math.floor(term.options.fontSize * Math.min(vw / (hostCols * cw), vh / (hostRows * ch)))));
+    term.options.fontSize = f;
+    for (var i = 0; i < 5; i++) {
+      s = screenEl();
+      if (!s || (s.offsetWidth <= vw + 1 && s.offsetHeight <= vh + 1)) break;
+      if (f <= 4) break; f -= 1; term.options.fontSize = f;
+    }
+  }
+  function setReadOnly(v){
+    readOnly = v; term.options.disableStdin = v;
+    document.getElementById('ro').style.display = v ? 'inline-flex' : 'none';
+    document.getElementById('composer').style.display = v ? 'none' : 'block';
+    fontsReady.then(fitFollow);
+  }
+  function sendBytes(s){ if (authed && !readOnly && activeId && ws.readyState === 1) ws.send(enc.encode(s)); }
+
+  function renderTabs(){
+    var bar = document.getElementById('tabs');
+    bar.querySelectorAll('.chip').forEach(function(c){ c.remove(); });
+    tabs.forEach(function(t){
+      var b = document.createElement('button');
+      b.className = 'chip' + (t.id === activeId ? ' active' : '');
+      var d = document.createElement('i'); d.className = 'dot'; d.style.background = AGENT_DOT[t.agent] || '#b0aea5';
+      var s = document.createElement('span'); s.textContent = t.title || 'Terminal';
+      b.appendChild(d); b.appendChild(s);
+      b.onclick = function(){ if (t.id !== activeId) attach(t.id); };
+      bar.appendChild(b);
+    });
+    document.getElementById('empty').style.display = tabs.length ? 'none' : 'flex';
+  }
+  function attach(id){ if (ws.readyState === 1) ws.send(JSON.stringify({ type:'attach', id:id })); }
+
+  function connect(){ var c = document.getElementById('pin').value.trim(); if (ws.readyState === 1) ws.send(JSON.stringify({ type:'pin', code:c })); }
+  ws.onmessage = function(ev){
+    if (typeof ev.data === 'string'){
+      var m = JSON.parse(ev.data);
+      if (m.type === 'ok'){ authed = true; setReadOnly(!!m.readOnly); document.getElementById('gate').style.display = 'none'; }
+      else if (m.type === 'denied'){ document.getElementById('err').textContent = 'Wrong code — try again'; }
+      else if (m.type === 'tabs'){
+        tabs = m.tabs || [];
+        // First list after auth: auto-attach the first tab. If the attached tab closed, hop
+        // to the first remaining one so the viewer is never stuck on a dead stream.
+        if (authed && tabs.length && (!activeId || !tabs.some(function(t){ return t.id === activeId; }))) attach(tabs[0].id);
+        if (!tabs.length) { activeId = null; term.reset(); }
+        renderTabs();
+      }
+      else if (m.type === 'attached'){ activeId = m.id; term.reset(); renderTabs(); }
+      else if (m.type === 'size'){ hostCols = m.cols; hostRows = m.rows; fontsReady.then(fitFollow); }
+      else if (m.type === 'readonly'){ setReadOnly(!!m.value); }
+      else if (m.type === 'stopped'){ document.getElementById('deadWhy').textContent = 'Hosting was stopped in the app.'; document.getElementById('dead').style.display = 'flex'; }
+    } else { term.write(new Uint8Array(ev.data)); }
+  };
+  ws.onclose = function(){ if (document.getElementById('gate').style.display !== 'none') return; document.getElementById('dead').style.display = 'flex'; };
+
+  // Direct typing into the terminal (desktop browsers / external keyboards).
+  term.onData(function(d){ sendBytes(d); });
+
+  // Composer: quick keys + a line input that submits text followed by Enter.
+  var KEYS = [
+    ['Esc','\x1b'], ['Tab','\t'], ['⇧Tab','\x1b[Z'], ['↑','\x1b[A'], ['↓','\x1b[B'],
+    ['←','\x1b[D'], ['→','\x1b[C'], ['^C','\x03'], ['⏎','\r']
+  ];
+  var keysEl = document.getElementById('keys');
+  KEYS.forEach(function(k){
+    var b = document.createElement('button'); b.className = 'k'; b.textContent = k[0];
+    // mousedown/touchstart instead of click so the composer input never loses focus mid-typing.
+    b.addEventListener('pointerdown', function(e){ e.preventDefault(); sendBytes(k[1]); });
+    keysEl.appendChild(b);
+  });
+  function submitLine(){
+    var inp = document.getElementById('inp');
+    if (inp.value) { sendBytes(inp.value); inp.value = ''; }
+    sendBytes('\r');
+  }
+  document.getElementById('send').addEventListener('pointerdown', function(e){ e.preventDefault(); submitLine(); });
+  document.getElementById('inp').addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); submitLine(); } });
+
+  window.addEventListener('resize', function(){ if (authed) fontsReady.then(fitFollow); });
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', function(){ if (authed) fontsReady.then(fitFollow); });
+  document.getElementById('go').onclick = connect;
+  document.getElementById('pin').addEventListener('keydown', function(e){ if (e.key === 'Enter') connect(); });
+</script>
+</body></html>"##;
+
+// Best-effort LAN address: open a UDP socket "towards" a public IP and read back which local
+// interface the OS would route through. No packets are actually sent. Falls back to localhost.
+fn lan_ip() -> String {
+    use std::net::UdpSocket;
+    UdpSocket::bind("0.0.0.0:0").ok()
+        .and_then(|s| s.connect("8.8.8.8:80").ok().map(|_| s))
+        .and_then(|s| s.local_addr().ok())
+        .map(|a| a.ip().to_string())
+        .unwrap_or_else(|| "localhost".to_string())
+}
+
+// 4-digit code derived from random UUID bytes — no extra rng dependency.
+fn gen_pin() -> String {
+    let b = uuid::Uuid::new_v4();
+    let bytes = b.as_bytes();
+    let n = u16::from_le_bytes([bytes[0], bytes[1]]) as u32 % 10000;
+    format!("{:04}", n)
+}
+
+fn host_session_url(session_id: &str, port: u16) -> String {
+    format!("http://{}:{}/s/{}", lan_ip(), port, session_id)
+}
+
+// The join URL as an SVG QR code for the host dialog — light modules on transparent so it sits
+// on the dialog's dark card; the dialog wraps it in a white tile for scanner contrast.
+fn host_qr_svg(url: &str) -> String {
+    qrcode::QrCode::new(url.as_bytes())
+        .map(|code| code.render::<qrcode::render::svg::Color>().quiet_zone(false).min_dimensions(168, 168).dark_color(qrcode::render::svg::Color("#141413")).light_color(qrcode::render::svg::Color("transparent")).build())
+        .unwrap_or_default()
+}
+
+fn host_write_to_pty(id: &str, data: &[u8]) {
+    if let Some(t) = HOST_TERMINALS.get() {
+        if let Ok(mut g) = t.lock() {
+            if let Some(h) = g.get_mut(id) {
+                let _ = h.writer.write_all(data);
+                let _ = h.writer.flush();
+            }
+        }
+    }
+}
+
+// Register a terminal for fan-out. For a PTY that is already running (hosting started after the
+// tab), the ring starts empty — nothing would show on the phone until the TUI next paints. The
+// jiggle forces that paint: shrink the grid by one row and restore it, which makes every TUI
+// redraw its full screen into the ring. Fresh tabs spawn after registration and need no jiggle.
+fn host_register_terminal(id: &str) {
+    let mut reg = host_registry().lock().unwrap();
+    if reg.contains_key(id) { return; }
+
+    let live = HOST_TERMINALS.get().and_then(|t| t.lock().ok().and_then(|g| g.get(id).map(|h| h.master.get_size().ok()))).flatten();
+    let (cols, rows) = live.map(|s| (s.cols, s.rows)).unwrap_or((80, 24));
+
+    let (tx, _rx) = tokio::sync::broadcast::channel::<HostMsg>(1024);
+    reg.insert(id.to_string(), HostedTerminal { tx, ring: Arc::new(Mutex::new(Vec::new())), size: Arc::new(Mutex::new((cols, rows))) });
+    HOSTED_TERMINALS.fetch_add(1, Ordering::Relaxed);
+    drop(reg);
+
+    if live.is_some() && rows > 2 {
+        let id = id.to_string();
+        std::thread::spawn(move || {
+            let resize = |c: u16, r: u16| {
+                if let Some(t) = HOST_TERMINALS.get() {
+                    if let Ok(g) = t.lock() {
+                        if let Some(h) = g.get(&id) { let _ = h.master.resize(PtySize { rows: r, cols: c, pixel_width: 0, pixel_height: 0 }); }
+                    }
+                }
+            };
+            resize(cols, rows - 1);
+            std::thread::sleep(Duration::from_millis(80));
+            resize(cols, rows);
+        });
+    }
+}
+
+fn host_tabs_event(tabs: &[HostedTabMeta]) -> String {
+    format!("{{\"type\":\"tabs\",\"tabs\":{}}}", serde_json::to_string(tabs).unwrap_or_else(|_| "[]".into()))
+}
+
+// Boot the axum server exactly once, on its own multi-thread tokio runtime so it never
+// contends with Tauri's runtime. Blocks only until the listener binds, then returns the port.
+fn ensure_host_server() -> Result<u16, String> {
+    if let Some(p) = HOST_SERVER_PORT.get() { return Ok(*p); }
+    let (tx, rx) = std::sync::mpsc::channel::<Result<u16, String>>();
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+            Ok(rt) => rt,
+            Err(e) => { let _ = tx.send(Err(format!("runtime: {e}"))); return; }
+        };
+        rt.block_on(async move {
+            let app = axum::Router::new()
+                .route("/s/:session", axum::routing::get(host_serve_page))
+                .route("/ws/:session", axum::routing::get(host_ws_handler))
+                .route("/fonts/:file", axum::routing::get(host_font));
+            let addr = std::net::SocketAddr::from(([0, 0, 0, 0], XSHELL_HOST_PORT));
+            match tokio::net::TcpListener::bind(addr).await {
+                Ok(listener) => {
+                    let _ = tx.send(Ok(XSHELL_HOST_PORT));
+                    let _ = axum::serve(listener, app).await;
+                }
+                Err(e) => { let _ = tx.send(Err(format!("bind {addr}: {e}"))); }
+            }
+        });
+    });
+    let port = rx.recv().map_err(|e| e.to_string())??;
+    let _ = HOST_SERVER_PORT.set(port);
+    Ok(port)
+}
+
+fn active_session(session_id: &str) -> Option<Arc<HostSession>> {
+    host_session_slot().lock().ok()?.as_ref().filter(|s| s.session_id == session_id).cloned()
+}
+
+async fn host_serve_page(axum::extract::Path(session): axum::extract::Path<String>) -> axum::response::Response {
+    if active_session(&session).is_none() {
+        return (axum::http::StatusCode::NOT_FOUND, "No active xshell session. Start hosting from the app.").into_response();
+    }
+    axum::response::Html(HOST_PAGE_HTML).into_response()
+}
+
+async fn host_font(axum::extract::Path(file): axum::extract::Path<String>) -> axum::response::Response {
+    let bytes: &'static [u8] = if file.contains("Bold") { FONT_BOLD } else { FONT_REGULAR };
+    ([(axum::http::header::CONTENT_TYPE, "font/woff2"), (axum::http::header::CACHE_CONTROL, "public, max-age=31536000")], bytes).into_response()
+}
+
+async fn host_ws_handler(ws: WebSocketUpgrade, axum::extract::Path(session): axum::extract::Path<String>) -> axum::response::Response {
+    ws.on_upgrade(move |socket| host_handle_socket(socket, session))
+}
+
+async fn host_handle_socket(mut socket: WebSocket, session_id: String) {
+    let Some(session) = active_session(&session_id) else { let _ = socket.send(Message::Close(None)).await; return; };
+
+    // Gate on the 4-digit code: client sends {"type":"pin","code":"1234"} first. Cap attempts
+    // per socket so a single connection can't brute-force all 10k combinations.
+    let mut attempts = 0u8;
+    let authed = loop {
+        match socket.recv().await {
+            Some(Ok(Message::Text(t))) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+                    if v.get("type").and_then(|x| x.as_str()) == Some("pin") {
+                        if v.get("code").and_then(|x| x.as_str()).unwrap_or("") == session.pin { break true; }
+                        attempts += 1;
+                        let _ = socket.send(Message::Text("{\"type\":\"denied\"}".into())).await;
+                        if attempts >= 5 { break false; }
+                    }
+                }
+            }
+            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break false,
+            _ => {}
+        }
+    };
+    if !authed { let _ = socket.send(Message::Close(None)).await; return; }
+
+    // Hand the viewer its starting state: read-only flag + the current tab list. It then picks
+    // a tab with {"type":"attach","id":…} — attaching sends grid size + ring replay + live stream.
+    let _ = socket.send(Message::Text(format!("{{\"type\":\"ok\",\"readOnly\":{}}}", session.read_only.load(Ordering::Relaxed)))).await;
+    let tabs_json = { session.tabs.lock().map(|t| host_tabs_event(&t)).unwrap_or_default() };
+    let _ = socket.send(Message::Text(tabs_json)).await;
+
+    let (mut sink, mut stream) = socket.split();
+
+    // Single writer drains this queue → WS sink; every producer (events forwarder, the active
+    // terminal forwarder, attach handshakes) goes through it so frames never interleave.
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Message>(256);
+    let writer = tokio::spawn(async move {
+        while let Some(m) = out_rx.recv().await {
+            if sink.send(m).await.is_err() { break; }
+        }
+        let _ = sink.send(Message::Close(None)).await;
+    });
+
+    // Session-wide control events (tabs list changes, read-only toggle, stop) → every viewer.
+    let mut events_rx = session.events.subscribe();
+    let ev_out = out_tx.clone();
+    let events_fwd = tokio::spawn(async move {
+        loop {
+            match events_rx.recv().await {
+                Ok(json) => { if ev_out.send(Message::Text(json)).await.is_err() { break; } }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    // Inbound loop. Binary = keystrokes for the attached terminal; {"type":"attach"} switches
+    // the active terminal by swapping the forwarder task feeding the shared out queue.
+    let mut attached: Option<String> = None;
+    let mut term_fwd: Option<tokio::task::JoinHandle<()>> = None;
+    while let Some(Ok(msg)) = stream.next().await {
+        match msg {
+            Message::Binary(b) => {
+                if let Some(id) = &attached {
+                    if !session.read_only.load(Ordering::Relaxed) { host_write_to_pty(id, &b); }
+                }
+            }
+            Message::Text(t) => {
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) else { continue };
+                if v.get("type").and_then(|x| x.as_str()) != Some("attach") { continue; }
+                let Some(id) = v.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()) else { continue };
+                // Only tabs the desktop actually advertised are attachable.
+                if !session.tabs.lock().map(|tl| tl.iter().any(|tab| tab.id == id)).unwrap_or(false) { continue; }
+                if let Some(f) = term_fwd.take() { f.abort(); }
+
+                // Snapshot fan-out state without holding the (std) lock across an await.
+                let snapshot = host_registry().lock().ok().and_then(|reg| reg.get(&id).map(|h| (h.tx.subscribe(), h.ring.lock().map(|r| r.clone()).unwrap_or_default(), h.size.lock().map(|s| *s).unwrap_or((80, 24)))));
+                let Some((mut term_rx, replay, (cols, rows))) = snapshot else { continue };
+
+                let _ = out_tx.send(Message::Text(format!("{{\"type\":\"attached\",\"id\":{}}}", serde_json::json!(id)))).await;
+                let _ = out_tx.send(Message::Text(format!("{{\"type\":\"size\",\"cols\":{},\"rows\":{}}}", cols, rows))).await;
+                if !replay.is_empty() { let _ = out_tx.send(Message::Binary(replay)).await; }
+
+                let term_out = out_tx.clone();
+                term_fwd = Some(tokio::spawn(async move {
+                    loop {
+                        match term_rx.recv().await {
+                            Ok(HostMsg::Data(bytes)) => { if term_out.send(Message::Binary(bytes)).await.is_err() { break; } }
+                            Ok(HostMsg::Size(c, r)) => { if term_out.send(Message::Text(format!("{{\"type\":\"size\",\"cols\":{},\"rows\":{}}}", c, r))).await.is_err() { break; } }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                }));
+                attached = Some(id);
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+    if let Some(f) = term_fwd.take() { f.abort(); }
+    events_fwd.abort();
+    writer.abort();
+}
+
+// Reconcile the fan-out registry with the tab list the desktop advertised: register newcomers,
+// drop terminals whose tabs closed, remember the list for late joiners, and tell live viewers.
+fn host_sync_tabs(session: &HostSession, tabs: Vec<HostedTabMeta>) {
+    let keep: HashSet<String> = tabs.iter().map(|t| t.id.clone()).collect();
+    for tab in &tabs { host_register_terminal(&tab.id); }
+    if let Ok(mut reg) = host_registry().lock() {
+        let stale: Vec<String> = reg.keys().filter(|k| !keep.contains(*k)).cloned().collect();
+        for k in stale { reg.remove(&k); HOSTED_TERMINALS.fetch_sub(1, Ordering::Relaxed); }
+    }
+    let event = host_tabs_event(&tabs);
+    if let Ok(mut t) = session.tabs.lock() { *t = tabs; }
+    let _ = session.events.send(event);
+}
+
+#[tauri::command]
+fn start_hosting_session(state: State<'_, AppState>, tabs: Vec<HostedTabMeta>, read_only: bool) -> Result<HostSessionInfo, String> {
+    // Make the live PTY map reachable from the server thread (first host only).
+    let _ = HOST_TERMINALS.set(state.terminals.clone());
+    let port = ensure_host_server()?;
+
+    let mut slot = host_session_slot().lock().map_err(|e| e.to_string())?;
+    // Starting while already hosting just returns the current session (idempotent toggle).
+    if let Some(s) = slot.as_ref() {
+        let url = host_session_url(&s.session_id, port);
+        return Ok(HostSessionInfo { session_id: s.session_id.clone(), qr_svg: host_qr_svg(&url), url, pin: s.pin.clone(), port, read_only: s.read_only.load(Ordering::Relaxed) });
+    }
+
+    let (events, _) = tokio::sync::broadcast::channel::<String>(64);
+    let session = Arc::new(HostSession {
+        session_id: uuid::Uuid::new_v4().to_string(),
+        pin: gen_pin(),
+        read_only: Arc::new(AtomicBool::new(read_only)),
+        tabs: Mutex::new(Vec::new()),
+        events,
+    });
+    host_sync_tabs(&session, tabs);
+    let info = {
+        let url = host_session_url(&session.session_id, port);
+        HostSessionInfo { session_id: session.session_id.clone(), qr_svg: host_qr_svg(&url), url, pin: session.pin.clone(), port, read_only }
+    };
+    *slot = Some(session);
+    Ok(info)
+}
+
+#[tauri::command]
+fn stop_hosting_session() -> Result<(), String> {
+    let mut slot = host_session_slot().lock().map_err(|e| e.to_string())?;
+    if let Some(s) = slot.take() {
+        let _ = s.events.send("{\"type\":\"stopped\"}".into());
+    }
+    if let Ok(mut reg) = host_registry().lock() { reg.clear(); }
+    HOSTED_TERMINALS.store(0, Ordering::Relaxed);
+    Ok(())
+}
+
+// Desktop → server: the tab set changed (open/close/rename). No-op when not hosting.
+#[tauri::command]
+fn update_hosted_tabs(tabs: Vec<HostedTabMeta>) -> Result<(), String> {
+    let session = { host_session_slot().lock().map_err(|e| e.to_string())?.clone() };
+    if let Some(s) = session { host_sync_tabs(&s, tabs); }
+    Ok(())
+}
+
+// Live toggle between view-only and interactive without dropping connected viewers.
+#[tauri::command]
+fn set_hosting_read_only(read_only: bool) -> Result<(), String> {
+    let session = { host_session_slot().lock().map_err(|e| e.to_string())?.clone() };
+    if let Some(s) = session {
+        s.read_only.store(read_only, Ordering::Relaxed);
+        let _ = s.events.send(format!("{{\"type\":\"readonly\",\"value\":{}}}", read_only));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn hosting_session_status() -> Option<HostSessionInfo> {
+    let port = *HOST_SERVER_PORT.get()?;
+    let slot = host_session_slot().lock().ok()?;
+    let s = slot.as_ref()?;
+    let url = host_session_url(&s.session_id, port);
+    Some(HostSessionInfo { session_id: s.session_id.clone(), qr_svg: host_qr_svg(&url), url, pin: s.pin.clone(), port, read_only: s.read_only.load(Ordering::Relaxed) })
+}
+
 // ── App Setup ──────────────────────────────────────────────────────────
 
 pub fn run() {
@@ -3263,8 +3893,107 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(AppState { terminals: Mutex::new(HashMap::new()) })
-        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, list_dir, search_dir, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_diff, git_stage, git_unstage, git_discard, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, list_cursor_projects, list_opencode_projects, list_antigravity_projects, get_codex_context, get_cursor_context, get_opencode_context, get_antigravity_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal])
+        .manage(AppState { terminals: Arc::new(Mutex::new(HashMap::new())) })
+        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, list_dir, search_dir, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_diff, git_stage, git_unstage, git_discard, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, list_cursor_projects, list_opencode_projects, list_antigravity_projects, get_codex_context, get_cursor_context, get_opencode_context, get_antigravity_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal, start_hosting_session, stop_hosting_session, update_hosted_tabs, set_hosting_read_only, hosting_session_status])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as WsMsg;
+
+    fn make_session(tabs: Vec<HostedTabMeta>) -> (Arc<HostSession>, u16) {
+        let _ = HOST_TERMINALS.set(Arc::new(Mutex::new(HashMap::new())));
+        let port = ensure_host_server().expect("server boots");
+        let (events, _) = tokio::sync::broadcast::channel::<String>(64);
+        let session = Arc::new(HostSession { session_id: uuid::Uuid::new_v4().to_string(), pin: "1234".into(), read_only: Arc::new(AtomicBool::new(false)), tabs: Mutex::new(Vec::new()), events });
+        host_sync_tabs(&session, tabs);
+        *host_session_slot().lock().unwrap() = Some(session.clone());
+        (session, port)
+    }
+
+    #[test]
+    fn phone_remote_protocol() {
+        let tabs = vec![
+            HostedTabMeta { id: "term-a".into(), title: "fix tests".into(), agent: "claude".into() },
+            HostedTabMeta { id: "term-b".into(), title: "db migration".into(), agent: "codex".into() },
+        ];
+        let (session, port) = make_session(tabs);
+        let sid = session.session_id.clone();
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            // Page serves for the right session id, 404s for a wrong one.
+            let page = reqwest_get(&format!("http://127.0.0.1:{port}/s/{sid}")).await;
+            assert!(page.contains("xshell remote"), "page html served");
+            let missing = reqwest_get(&format!("http://127.0.0.1:{port}/s/not-a-session")).await;
+            assert!(missing.contains("No active xshell session"), "wrong session 404s");
+
+            // WS: wrong pin denied, right pin → ok + tabs.
+            let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws/{sid}")).await.expect("ws connects");
+            ws.send(WsMsg::Text("{\"type\":\"pin\",\"code\":\"0000\"}".into())).await.unwrap();
+            let denied = recv_text(&mut ws).await;
+            assert!(denied.contains("denied"), "wrong pin denied: {denied}");
+            ws.send(WsMsg::Text("{\"type\":\"pin\",\"code\":\"1234\"}".into())).await.unwrap();
+            let ok = recv_text(&mut ws).await;
+            assert!(ok.contains("\"ok\""), "right pin accepted: {ok}");
+            let tabs_msg = recv_text(&mut ws).await;
+            assert!(tabs_msg.contains("term-a") && tabs_msg.contains("db migration"), "tab list pushed: {tabs_msg}");
+
+            // Attach → attached + size handshake.
+            ws.send(WsMsg::Text("{\"type\":\"attach\",\"id\":\"term-a\"}".into())).await.unwrap();
+            let attached = recv_text(&mut ws).await;
+            assert!(attached.contains("attached") && attached.contains("term-a"), "attach ack: {attached}");
+            let size = recv_text(&mut ws).await;
+            assert!(size.contains("\"size\""), "size follows attach: {size}");
+
+            // Live PTY output fans out to the attached viewer.
+            {
+                let reg = host_registry().lock().unwrap();
+                let _ = reg.get("term-a").unwrap().tx.send(HostMsg::Data(b"hello from pty".to_vec()));
+            }
+            let bin = recv_binary(&mut ws).await;
+            assert_eq!(bin, b"hello from pty".to_vec(), "pty bytes stream to viewer");
+
+            // Tab-list update reaches a connected viewer; stop ends the session.
+            update_hosted_tabs(vec![HostedTabMeta { id: "term-b".into(), title: "db migration".into(), agent: "codex".into() }]).unwrap();
+            let update = recv_text(&mut ws).await;
+            assert!(update.contains("tabs") && !update.contains("term-a"), "tab update pushed: {update}");
+            stop_hosting_session().unwrap();
+            let stopped = recv_text(&mut ws).await;
+            assert!(stopped.contains("stopped"), "stop event pushed: {stopped}");
+            println!("PHONE REMOTE PROTOCOL: all assertions passed");
+        });
+    }
+
+    async fn recv_text(ws: &mut (impl StreamExt<Item = Result<WsMsg, tokio_tungstenite::tungstenite::Error>> + Unpin)) -> String {
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), ws.next()).await.expect("ws recv timeout").expect("ws stream open").expect("ws frame ok") {
+                WsMsg::Text(t) => return t,
+                _ => continue,
+            }
+        }
+    }
+    async fn recv_binary(ws: &mut (impl StreamExt<Item = Result<WsMsg, tokio_tungstenite::tungstenite::Error>> + Unpin)) -> Vec<u8> {
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), ws.next()).await.expect("ws recv timeout").expect("ws stream open").expect("ws frame ok") {
+                WsMsg::Binary(b) => return b,
+                _ => continue,
+            }
+        }
+    }
+    async fn reqwest_get(url: &str) -> String {
+        // Tiny HTTP GET over a raw TcpStream — avoids pulling an http client dev-dependency.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let addr = url.trim_start_matches("http://").split('/').next().unwrap().to_string();
+        let path = format!("/{}", url.trim_start_matches("http://").splitn(2, '/').nth(1).unwrap_or(""));
+        let mut s = tokio::net::TcpStream::connect(&addr).await.unwrap();
+        s.write_all(format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        s.read_to_end(&mut buf).await.unwrap();
+        String::from_utf8_lossy(&buf).into_owned()
+    }
 }

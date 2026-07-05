@@ -51,6 +51,24 @@ export interface AntigravityContext {
   sections: AgentContextSection[];
 }
 
+// ── Phone remote (see lib.rs: start_hosting_session & friends) ──────────
+
+export interface HostSessionInfo {
+  session_id: string;
+  url: string;
+  pin: string;
+  port: number;
+  read_only: boolean;
+  qr_svg: string;
+}
+
+// One tab as advertised to the phone client — id must match the spawned terminal id.
+export interface HostedTabMeta {
+  id: string;
+  title: string;
+  agent: string;
+}
+
 // ── Home usage strip (see lib.rs: get_claude_cost_summary / get_codex_usage) ──
 
 export interface DailyUsd { date: string; usd: number }

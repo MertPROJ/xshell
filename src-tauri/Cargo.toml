@@ -25,6 +25,19 @@ uuid = { version = "1", features = ["v4"] }
 # depend on a system libsqlite. md5: Cursor keys chat folders by md5 of the workspace cwd.
 rusqlite = { version = "0.31", features = ["bundled"] }
 md5 = "0.7"
+# Phone remote: an in-process HTTP/WebSocket server streams the live terminal tabs to a
+# browser (xterm.js) so a session can be controlled from a phone on the LAN. axum carries
+# the WS, tokio runs it on a dedicated runtime thread (kept off Tauri's own runtime),
+# futures-util gives the split/sink/stream combinators the WS pump uses, qrcode renders
+# the join URL as an SVG for the host dialog.
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "io-util", "macros"] }
+futures-util = "0.3"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+
+[dev-dependencies]
+# WS client for the phone-remote protocol tests (PIN gate, tabs push, attach handshake).
+tokio-tungstenite = "0.23"
 
 # Dev profile: fast incremental rebuilds, light optimization for deps
 [profile.dev]

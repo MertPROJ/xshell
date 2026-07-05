@@ -14,8 +14,9 @@ import { DARK_TERM_BG, LIGHT_TERM_BG } from "./components/TerminalTab";
 import { ProjectEditorDialog } from "./components/ProjectEditorDialog";
 import { ProjectPicker } from "./components/ProjectPicker";
 import { AgentPickerDialog } from "./components/AgentPickerDialog";
+import { HostDialog } from "./components/HostDialog";
 import { AGENT_IDS, AGENTS, type AgentId } from "./agents";
-import type { ProjectInfo, ProjectSettings, SessionFolder, SessionInfo, Tab, Group, LayoutNode, SidebarItem, SidebarFolder } from "./types";
+import type { ProjectInfo, ProjectSettings, SessionFolder, SessionInfo, Tab, Group, LayoutNode, SidebarItem, SidebarFolder, HostSessionInfo, HostedTabMeta } from "./types";
 import { GroupView } from "./components/GroupView";
 import { countLeaves, collectLeafIds, insertLeaf, removeLeaf, setRatioAt, DropZone } from "./layout";
 import { useUpdateCheck } from "./hooks/useUpdateCheck";
@@ -157,6 +158,10 @@ export default function App() {
   const [installedAgents, setInstalledAgents] = useState<Record<AgentId, boolean>>(() => Object.fromEntries(AGENT_IDS.map(id => [id, id === "claude"])) as Record<AgentId, boolean>);
   // "ask" = show the agent picker dialog per new chat (only relevant with 2+ agents).
   const [defaultAgent, setDefaultAgent] = useState<"ask" | AgentId>("ask");
+  // Phone remote: the live hosting session (null = not hosting) and the dialog's visibility.
+  const [hostInfo, setHostInfo] = useState<HostSessionInfo | null>(null);
+  const [hostDialogOpen, setHostDialogOpen] = useState(false);
+  const [hostStarting, setHostStarting] = useState(false);
   // Project waiting on an agent choice — set when a new chat needs the picker dialog.
   const [agentPickerProject, setAgentPickerProject] = useState<ProjectInfo | null>(null);
 
@@ -562,6 +567,36 @@ export default function App() {
     setDefaultAgent(next);
     try { const store = await load("settings.json", { defaults: {}, autoSave: true }); await store.set("default_agent", next); } catch (_) {}
   }, []);
+
+  // ── Phone remote ────────────────────────────────────────────────────
+  // What the phone sees: every terminal tab, keyed by the same id spawn_terminal registered.
+  // Raw shells advertise agent "shell" so the client can color their chip dot.
+  const hostedTabsMeta = useMemo<HostedTabMeta[]>(() =>
+    tabs.filter(t => t.type === "terminal").map(t => ({ id: t.id, title: t.title || t.projectName || "Terminal", agent: t.shellMode === "raw" ? "shell" : (t.agent || "claude") })),
+  [tabs]);
+
+  const startHosting = useCallback(async () => {
+    setHostStarting(true);
+    try { setHostInfo(await invoke<HostSessionInfo>("start_hosting_session", { tabs: hostedTabsMeta, readOnly: false })); } catch (e) { console.error("[host] start failed:", e); }
+    setHostStarting(false);
+  }, [hostedTabsMeta]);
+
+  const stopHosting = useCallback(async () => {
+    try { await invoke("stop_hosting_session"); } catch (_) {}
+    setHostInfo(null);
+  }, []);
+
+  const setHostingReadOnly = useCallback(async (readOnly: boolean) => {
+    try { await invoke("set_hosting_read_only", { readOnly }); setHostInfo(prev => prev ? { ...prev, read_only: readOnly } : prev); } catch (_) {}
+  }, []);
+
+  // While hosting, keep the server's tab list in step with the real tabs — new/closed tabs and
+  // title renames all flow to connected phones. Serialized dep so no-op renders don't re-invoke.
+  const hostedTabsJson = JSON.stringify(hostedTabsMeta);
+  useEffect(() => {
+    if (!hostInfo) return;
+    invoke("update_hosted_tabs", { tabs: JSON.parse(hostedTabsJson) }).catch(() => {});
+  }, [hostInfo, hostedTabsJson]);
 
   // Safety net: keep the attribute in sync with state on every change (covers the initial
   // restore from settings.json, where setTheme is called outside persistTheme).
@@ -1132,7 +1167,7 @@ export default function App() {
           <span>Loading...</span>
         </div>
       )}
-      <TabBar tabs={tabs} entries={entries} onRenameGroup={(id, name) => setGroups(prev => prev.map(g => g.id === id ? { ...g, name } : g))} closingTabIds={closingTabIds} activeTabId={activeTabId} selectedProject={selectedProject} hoveredProjectPath={hoveredProjectPath} linkedProjectPath={activeTabProjectPath} activeTabProject={contextProject} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} projectIcons={projectIcons} pinnedProjects={userProjects} sidebarCollapsed={sidebarCollapsed} defaultShell={defaultShell} installedAgents={installedAgents} updateAvailable={updateInfo.updateAvailable} onExpandSidebar={() => setSidebarCollapsed(false)} onSelectTab={handleSelectTab} onCloseTab={handleCloseTab} onReorderTabs={handleReorderTabs} onNewChat={handleNewChat} onNewChatInActive={handleNewChatInActive} onNewShellInContext={handleNewShellInContext} onOpenSession={handleOpenSession} onNewShell={handleNewShell} onGoHome={handleGoHome} onOpenSettings={() => setActiveTabId("settings")} onToggleSidebar={() => setSidebarCollapsed(c => !c)} />
+      <TabBar tabs={tabs} entries={entries} onRenameGroup={(id, name) => setGroups(prev => prev.map(g => g.id === id ? { ...g, name } : g))} closingTabIds={closingTabIds} activeTabId={activeTabId} selectedProject={selectedProject} hoveredProjectPath={hoveredProjectPath} linkedProjectPath={activeTabProjectPath} activeTabProject={contextProject} openSessionIds={new Set(tabs.filter(t => t.sessionId).map(t => t.sessionId!))} projectIcons={projectIcons} pinnedProjects={userProjects} sidebarCollapsed={sidebarCollapsed} defaultShell={defaultShell} installedAgents={installedAgents} updateAvailable={updateInfo.updateAvailable} onExpandSidebar={() => setSidebarCollapsed(false)} onSelectTab={handleSelectTab} onCloseTab={handleCloseTab} onReorderTabs={handleReorderTabs} onNewChat={handleNewChat} onNewChatInActive={handleNewChatInActive} onNewShellInContext={handleNewShellInContext} onOpenSession={handleOpenSession} onNewShell={handleNewShell} onGoHome={handleGoHome} onOpenSettings={() => setActiveTabId("settings")} onToggleSidebar={() => setSidebarCollapsed(c => !c)} hostingActive={!!hostInfo} onOpenHostDialog={() => setHostDialogOpen(true)} />
       <div className="app-body">
       <Sidebar projects={userProjects} projectIcons={projectIcons} selectedProject={selectedProject} activeCountByProject={activeCountByProject} sidebarLayout={sidebarLayout} onLayoutChange={persistSidebarLayout} onSelectProject={handleSelectProject} onGoHome={handleGoHome} onRemoveProject={handleRemoveProject} onEditProject={(p) => setEditingProjectPath(p)} onHoverProject={setHoveredProjectPath} onOpenSettings={() => setActiveTabId("settings")} onAddProject={() => setShowProjectPicker(true)} onCollapse={() => setSidebarCollapsed(true)} activeTabId={activeTabId} linkedProjectPath={activeTabProjectPath} showRateLimit={showRateLimitInSidebar} showRateLimitCodex={showRateLimitInSidebarCodex} updateAvailable={updateInfo.updateAvailable} />
       <div className="main-content">
@@ -1229,6 +1264,7 @@ export default function App() {
       </div>
       </div>
       {showProjectPicker && <ProjectPicker allProjects={allProjects} savedPaths={savedPaths} onToggle={handleToggleProject} onBrowse={() => { handleBrowseFolder(); setShowProjectPicker(false); }} onClose={() => setShowProjectPicker(false)} onRefresh={async () => { try { setAllProjects(await invoke<ProjectInfo[]>("list_claude_projects")); } catch (_) {} }} />}
+      {hostDialogOpen && <HostDialog info={hostInfo} starting={hostStarting} onStart={startHosting} onStop={stopHosting} onSetReadOnly={setHostingReadOnly} onClose={() => setHostDialogOpen(false)} />}
       {agentPickerProject && <AgentPickerDialog project={agentPickerProject} agents={AGENT_IDS.filter(a => installedAgents[a])} onPick={(agent) => { const p = agentPickerProject; setAgentPickerProject(null); handleNewChat(p, agent); }} onClose={() => setAgentPickerProject(null)} onOpenSettings={() => { setAgentPickerProject(null); setActiveTabId("settings"); }} />}
       {editingProjectPath && (() => {
         const proj = allProjects.find(p => p.path.toLowerCase() === editingProjectPath.toLowerCase()) || userProjects.find(p => p.path.toLowerCase() === editingProjectPath.toLowerCase());

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useLayoutEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { X, Minus, Square, X as XIcon, Plus, ChevronDown, ChevronLeft, ChevronRight, Terminal as TerminalIcon, Command, Settings, Bot } from "lucide-react";
+import { X, Minus, Square, X as XIcon, Plus, ChevronDown, ChevronLeft, ChevronRight, Terminal as TerminalIcon, Command, Settings, Bot, Cast } from "lucide-react";
 import { ShellIcon } from "./ShellIcon";
 import { AGENT_IDS, AGENTS, AgentIcon, type AgentId } from "../agents";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -63,6 +63,9 @@ interface TabBarProps {
   onGoHome: () => void;
   onOpenSettings: () => void;
   onToggleSidebar: () => void;
+  // Phone remote — true while a hosting session is live (tints the cast button).
+  hostingActive: boolean;
+  onOpenHostDialog: () => void;
 }
 
 function RecentSessionsDropdown({ project, displayName, openSessionIds, anchorRect, anchorEl, installedAgents, onPick, onPickShell, onNewChat, onClose }: { project: ProjectInfo | null; displayName: string; openSessionIds: Set<string>; anchorRect: DOMRect; anchorEl: HTMLElement; installedAgents: Record<AgentId, boolean>; onPick: (s: SessionInfo) => void; onPickShell: (shellId: string, shellName: string) => void; onNewChat: (agent?: AgentId) => void; onClose: () => void }) {
@@ -202,7 +205,7 @@ function TabTooltip({ text, rect }: { text: string; rect: DOMRect }) {
   return <div className="tab-tooltip" ref={ref} style={style}>{text}</div>;
 }
 
-export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProject, hoveredProjectPath, linkedProjectPath, activeTabProject, openSessionIds, projectIcons, pinnedProjects, sidebarCollapsed, defaultShell, installedAgents, updateAvailable, onExpandSidebar, onSelectTab, onCloseTab, onReorderTabs, onNewChat, onNewChatInActive, onNewShellInContext, onOpenSession, onNewShell, onRenameGroup, onGoHome, onOpenSettings, onToggleSidebar }: TabBarProps) {
+export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProject, hoveredProjectPath, linkedProjectPath, activeTabProject, openSessionIds, projectIcons, pinnedProjects, sidebarCollapsed, defaultShell, installedAgents, updateAvailable, onExpandSidebar, onSelectTab, onCloseTab, onReorderTabs, onNewChat, onNewChatInActive, onNewShellInContext, onOpenSession, onNewShell, onRenameGroup, onGoHome, onOpenSettings, onToggleSidebar, hostingActive, onOpenHostDialog }: TabBarProps) {
   const appWindow = getCurrentWindow();
   const highlightPath = hoveredProjectPath || linkedProjectPath || selectedProject?.path || null;
   const [dropdown, setDropdown] = useState<{ rect: DOMRect; el: HTMLElement } | null>(null);
@@ -411,6 +414,11 @@ export function TabBar({ tabs, entries, closingTabIds, activeTabId, selectedProj
       <button className={`tb-search-btn ${searchOpen ? "active" : ""}`} onClick={() => setSearchOpen(v => !v)} onMouseEnter={(e) => showTooltip(`Quick Actions (${shortcutLabel})`, e.currentTarget)} onMouseLeave={hideTooltip} aria-label="Quick Actions">
         <Command size={13} />
         <span className="tb-search-kbd">{shortcutLabel}</span>
+      </button>
+
+      <button className={`tb-settings-btn tb-host-btn ${hostingActive ? "hosting" : ""}`} onClick={onOpenHostDialog} onMouseEnter={(e) => showTooltip(hostingActive ? "Phone remote — hosting" : "Phone remote", e.currentTarget)} onMouseLeave={hideTooltip} aria-label="Phone remote">
+        <Cast size={15} />
+        {hostingActive && <span className="tb-host-live-dot" />}
       </button>
 
       <button className={`tb-settings-btn ${activeTabId === "settings" ? "active" : ""}`} onClick={onOpenSettings} onMouseEnter={(e) => showTooltip(updateAvailable ? "Settings — update available" : "Settings", e.currentTarget)} onMouseLeave={hideTooltip} aria-label="Settings">
