@@ -2133,6 +2133,16 @@ fn write_terminal(state: State<'_, AppState>, id: String, data: String) -> Resul
 
 #[tauri::command]
 fn resize_terminal(state: State<'_, AppState>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    // While a phone owns the grid ("fit to phone"), the viewer is the source of truth — record
+    // the desktop's intent (so releasing ownership restores it) but don't touch the PTY.
+    if HOSTED_TERMINALS.load(Ordering::Relaxed) > 0 {
+        if let Ok(reg) = host_registry().lock() {
+            if let Some(h) = reg.get(&id) {
+                if let Ok(mut a) = h.app_size.lock() { *a = (cols, rows); }
+                if h.browser_owns.load(Ordering::Relaxed) { return Ok(()); }
+            }
+        }
+    }
     let terminals = state.terminals.lock().unwrap();
     if let Some(handle) = terminals.get(&id) {
         handle.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| format!("Resize failed: {}", e))?;
@@ -3322,7 +3332,15 @@ enum HostMsg {
 struct HostedTerminal {
     tx: tokio::sync::broadcast::Sender<HostMsg>,
     ring: Arc<Mutex<Vec<u8>>>,
+    // Current PTY grid — whatever was applied last, by the app or by a fitting phone.
     size: Arc<Mutex<(u16, u16)>>,
+    // "Fit to phone": while true, the attached viewer owns the grid — it resizes the PTY to
+    // its own screen and desktop-driven resizes are ignored (recorded only). Released when
+    // the viewer toggles fit off, switches tabs, or disconnects.
+    browser_owns: Arc<AtomicBool>,
+    // The desktop's grid intent, tracked even while a phone owns the size, so releasing
+    // ownership can restore exactly what the app wants.
+    app_size: Arc<Mutex<(u16, u16)>>,
 }
 
 fn host_registry() -> &'static Mutex<HashMap<String, HostedTerminal>> {
@@ -3382,6 +3400,7 @@ const HOST_PAGE_HTML: &str = r##"<!doctype html>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <style>
   @font-face { font-family:"JetBrains Mono"; font-weight:400; font-style:normal; font-display:block; src:url("/fonts/JetBrainsMono-Regular.woff2") format("woff2"); }
   @font-face { font-family:"JetBrains Mono"; font-weight:700; font-style:normal; font-display:block; src:url("/fonts/JetBrainsMono-Bold.woff2") format("woff2"); }
@@ -3397,8 +3416,16 @@ const HOST_PAGE_HTML: &str = r##"<!doctype html>
   .chip.active{border-color:#c96442;background:rgba(201,100,66,.12);color:#faf9f5}
   #brand{flex:none;font-size:12px;font-weight:700;letter-spacing:.02em;color:#faf9f5;padding-right:4px}
   #brand em{color:#c96442;font-style:normal}
-  /* Letterboxed terminal — the app owns the grid, we scale the font to fit. */
+  /* Fit-to-phone toggle — pushed to the right end of the tab strip. */
+  #fit{flex:none;margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:7px 11px;border-radius:999px;border:1px solid #3a3a38;background:#1c1c1b;color:#b0aea5;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap}
+  #fit.on{border-color:#c96442;background:rgba(201,100,66,.12);color:#faf9f5}
+  #fit .fdot{width:7px;height:7px;border-radius:99px;background:#5e5d59;flex:none}
+  #fit.on .fdot{background:#c96442}
+  /* FOLLOW (default): letterbox the app's grid, scaling the font to fit. DRIVE (body.drive,
+     "fit to phone"): the terminal fills the box so FitAddon sizes the grid to the phone. */
   #wrap{position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;min-height:0}
+  body.drive #wrap{display:block}
+  body.drive #term{position:absolute;inset:6px}
   #empty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;color:#5e5d59;font-size:13px;text-align:center;padding:0 24px}
   #ro{position:absolute;top:8px;right:10px;z-index:8;display:none;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;background:rgba(90,176,240,.16);border:1px solid rgba(90,176,240,.4);color:#9cd2ff;font-size:11px;font-weight:600}
   /* Composer — quick keys + text input tuned for soft keyboards. */
@@ -3423,7 +3450,7 @@ const HOST_PAGE_HTML: &str = r##"<!doctype html>
 </style></head>
 <body>
   <div id="app">
-    <div id="tabs"><span id="brand">x<em>shell</em></span></div>
+    <div id="tabs"><span id="brand">x<em>shell</em></span><button id="fit"><i class="fdot"></i>Fit to phone</button></div>
     <div id="wrap"><div id="term"></div><div id="empty">No terminal tabs are open in the app right now.</div><div id="ro">● View only</div></div>
     <div id="composer">
       <div id="keys"></div>
@@ -3466,6 +3493,8 @@ const HOST_PAGE_HTML: &str = r##"<!doctype html>
   });
   term.loadAddon(new Unicode11Addon.Unicode11Addon());
   term.unicode.activeVersion = '11';
+  var fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
   term.open(document.getElementById('term'));
   try { var gl = new WebglAddon.WebglAddon(); gl.onContextLoss(function(){ gl.dispose(); }); term.loadAddon(gl); } catch(e){}
   var fontsReady = (document.fonts && document.fonts.load)
@@ -3473,11 +3502,11 @@ const HOST_PAGE_HTML: &str = r##"<!doctype html>
     : Promise.resolve();
 
   var authed = false, readOnly = false, activeId = null, tabs = [], enc = new TextEncoder();
-  var hostCols = 0, hostRows = 0;
+  var hostCols = 0, hostRows = 0, fitMode = false, BASE_FONT = 14;
 
   function screenEl(){ return term.element && term.element.querySelector('.xterm-screen'); }
-  // Render the host's fixed grid and scale the FONT so it fills the box — letterboxed, never
-  // clipped, and resizing the phone/keyboard never touches the PTY.
+  // FOLLOW: render the host's fixed grid and scale the FONT so it fills the box — letterboxed,
+  // never clipped, and resizing the phone/keyboard never touches the PTY.
   function fitFollow(){
     if (!hostCols || !hostRows) return;
     if (term.cols !== hostCols || term.rows !== hostRows) { try { term.resize(hostCols, hostRows); } catch(e){} }
@@ -3493,11 +3522,27 @@ const HOST_PAGE_HTML: &str = r##"<!doctype html>
       if (f <= 4) break; f -= 1; term.options.fontSize = f;
     }
   }
+  // DRIVE ("fit to phone"): native font, fit the grid to THIS window, tell the server the new
+  // size so it resizes the PTY. The desktop reclaims the grid when fit turns off / we leave.
+  function fitDrive(){
+    term.options.fontSize = BASE_FONT;
+    try { fit.fit(); } catch(e){}
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type:'resize', cols: term.cols, rows: term.rows }));
+  }
+  function reflow(){ if (fitMode) fitDrive(); else fitFollow(); }
+
+  function setFit(on){
+    fitMode = on;
+    var btn = document.getElementById('fit'); btn.classList.toggle('on', on);
+    document.body.classList.toggle('drive', on);
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type:'fit', value: on }));
+    fontsReady.then(reflow);
+  }
   function setReadOnly(v){
     readOnly = v; term.options.disableStdin = v;
     document.getElementById('ro').style.display = v ? 'inline-flex' : 'none';
     document.getElementById('composer').style.display = v ? 'none' : 'block';
-    fontsReady.then(fitFollow);
+    fontsReady.then(reflow);
   }
   function sendBytes(s){ if (authed && !readOnly && activeId && ws.readyState === 1) ws.send(enc.encode(s)); }
 
@@ -3531,8 +3576,9 @@ const HOST_PAGE_HTML: &str = r##"<!doctype html>
         if (!tabs.length) { activeId = null; term.reset(); }
         renderTabs();
       }
-      else if (m.type === 'attached'){ activeId = m.id; term.reset(); renderTabs(); }
-      else if (m.type === 'size'){ hostCols = m.cols; hostRows = m.rows; fontsReady.then(fitFollow); }
+      else if (m.type === 'attached'){ activeId = m.id; term.reset(); renderTabs(); if (fitMode) fontsReady.then(fitDrive); }
+      // In drive mode the phone owns the grid, so ignore the server's letterbox size echoes.
+      else if (m.type === 'size'){ if (!fitMode) { hostCols = m.cols; hostRows = m.rows; fontsReady.then(fitFollow); } }
       else if (m.type === 'readonly'){ setReadOnly(!!m.value); }
       else if (m.type === 'stopped'){ document.getElementById('deadWhy').textContent = 'Hosting was stopped in the app.'; document.getElementById('dead').style.display = 'flex'; }
     } else { term.write(new Uint8Array(ev.data)); }
@@ -3562,8 +3608,9 @@ const HOST_PAGE_HTML: &str = r##"<!doctype html>
   document.getElementById('send').addEventListener('pointerdown', function(e){ e.preventDefault(); submitLine(); });
   document.getElementById('inp').addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); submitLine(); } });
 
-  window.addEventListener('resize', function(){ if (authed) fontsReady.then(fitFollow); });
-  if (window.visualViewport) window.visualViewport.addEventListener('resize', function(){ if (authed) fontsReady.then(fitFollow); });
+  document.getElementById('fit').addEventListener('pointerdown', function(e){ e.preventDefault(); if (authed && activeId) setFit(!fitMode); });
+  window.addEventListener('resize', function(){ if (authed) fontsReady.then(reflow); });
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', function(){ if (authed) fontsReady.then(reflow); });
   document.getElementById('go').onclick = connect;
   document.getElementById('pin').addEventListener('keydown', function(e){ if (e.key === 'Enter') connect(); });
 </script>
@@ -3611,6 +3658,35 @@ fn host_write_to_pty(id: &str, data: &[u8]) {
     }
 }
 
+// Resize the live PTY from the server side — used while a phone owns the grid.
+fn host_write_resize(id: &str, cols: u16, rows: u16) {
+    if let Some(t) = HOST_TERMINALS.get() {
+        if let Ok(g) = t.lock() {
+            if let Some(h) = g.get(id) { let _ = h.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }); }
+        }
+    }
+}
+
+// Fit-to-phone hand-over. Taking the grid just flips ownership — the phone's first resize
+// message applies its dimensions. Releasing restores the desktop's recorded grid intent and
+// broadcasts it so every viewer (and the phone itself, back in letterbox mode) follows.
+fn host_take_grid(id: &str) {
+    if let Ok(reg) = host_registry().lock() {
+        if let Some(h) = reg.get(id) { h.browser_owns.store(true, Ordering::Relaxed); }
+    }
+}
+
+fn host_release_grid(id: &str) {
+    let restore = host_registry().lock().ok().and_then(|reg| reg.get(id).map(|h| {
+        h.browser_owns.store(false, Ordering::Relaxed);
+        let app = h.app_size.lock().map(|a| *a).unwrap_or((80, 24));
+        if let Ok(mut s) = h.size.lock() { *s = app; }
+        let _ = h.tx.send(HostMsg::Size(app.0, app.1));
+        app
+    }));
+    if let Some((cols, rows)) = restore { host_write_resize(id, cols, rows); }
+}
+
 // Register a terminal for fan-out. For a PTY that is already running (hosting started after the
 // tab), the ring starts empty — nothing would show on the phone until the TUI next paints. The
 // jiggle forces that paint: shrink the grid by one row and restore it, which makes every TUI
@@ -3623,7 +3699,7 @@ fn host_register_terminal(id: &str) {
     let (cols, rows) = live.map(|s| (s.cols, s.rows)).unwrap_or((80, 24));
 
     let (tx, _rx) = tokio::sync::broadcast::channel::<HostMsg>(1024);
-    reg.insert(id.to_string(), HostedTerminal { tx, ring: Arc::new(Mutex::new(Vec::new())), size: Arc::new(Mutex::new((cols, rows))) });
+    reg.insert(id.to_string(), HostedTerminal { tx, ring: Arc::new(Mutex::new(Vec::new())), size: Arc::new(Mutex::new((cols, rows))), browser_owns: Arc::new(AtomicBool::new(false)), app_size: Arc::new(Mutex::new((cols, rows))) });
     HOSTED_TERMINALS.fetch_add(1, Ordering::Relaxed);
     drop(reg);
 
@@ -3663,13 +3739,20 @@ fn ensure_host_server() -> Result<u16, String> {
                 .route("/s/:session", axum::routing::get(host_serve_page))
                 .route("/ws/:session", axum::routing::get(host_ws_handler))
                 .route("/fonts/:file", axum::routing::get(host_font));
-            let addr = std::net::SocketAddr::from(([0, 0, 0, 0], XSHELL_HOST_PORT));
-            match tokio::net::TcpListener::bind(addr).await {
+            // Prefer the memorable default port; if it's taken (another xshell instance, a stray
+            // process), fall back to an OS-assigned ephemeral port so hosting still starts. The
+            // chosen port flows into every join URL, so a non-default port just works.
+            let listener = match tokio::net::TcpListener::bind(std::net::SocketAddr::from(([0, 0, 0, 0], XSHELL_HOST_PORT))).await {
+                Ok(l) => Ok(l),
+                Err(_) => tokio::net::TcpListener::bind(std::net::SocketAddr::from(([0, 0, 0, 0], 0))).await,
+            };
+            match listener {
                 Ok(listener) => {
-                    let _ = tx.send(Ok(XSHELL_HOST_PORT));
+                    let port = listener.local_addr().map(|a| a.port()).unwrap_or(XSHELL_HOST_PORT);
+                    let _ = tx.send(Ok(port));
                     let _ = axum::serve(listener, app).await;
                 }
-                Err(e) => { let _ = tx.send(Err(format!("bind {addr}: {e}"))); }
+                Err(e) => { let _ = tx.send(Err(format!("bind failed: {e}"))); }
             }
         });
     });
@@ -3754,8 +3837,11 @@ async fn host_handle_socket(mut socket: WebSocket, session_id: String) {
     });
 
     // Inbound loop. Binary = keystrokes for the attached terminal; {"type":"attach"} switches
-    // the active terminal by swapping the forwarder task feeding the shared out queue.
+    // the active terminal by swapping the forwarder task feeding the shared out queue;
+    // {"type":"fit"} toggles fit-to-phone (this socket owns the attached terminal's grid) and
+    // {"type":"resize"} applies the phone's grid while fitting.
     let mut attached: Option<String> = None;
+    let mut fit = false;
     let mut term_fwd: Option<tokio::task::JoinHandle<()>> = None;
     while let Some(Ok(msg)) = stream.next().await {
         match msg {
@@ -3766,37 +3852,67 @@ async fn host_handle_socket(mut socket: WebSocket, session_id: String) {
             }
             Message::Text(t) => {
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) else { continue };
-                if v.get("type").and_then(|x| x.as_str()) != Some("attach") { continue; }
-                let Some(id) = v.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()) else { continue };
-                // Only tabs the desktop actually advertised are attachable.
-                if !session.tabs.lock().map(|tl| tl.iter().any(|tab| tab.id == id)).unwrap_or(false) { continue; }
-                if let Some(f) = term_fwd.take() { f.abort(); }
+                match v.get("type").and_then(|x| x.as_str()) {
+                    Some("attach") => {
+                        let Some(id) = v.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()) else { continue };
+                        // Only tabs the desktop actually advertised are attachable.
+                        if !session.tabs.lock().map(|tl| tl.iter().any(|tab| tab.id == id)).unwrap_or(false) { continue; }
+                        if let Some(f) = term_fwd.take() { f.abort(); }
+                        // Fit follows the viewer: hand the old terminal's grid back to the app,
+                        // take the new one's (the phone sends its resize right after "attached").
+                        if fit { if let Some(old) = &attached { host_release_grid(old); } }
 
-                // Snapshot fan-out state without holding the (std) lock across an await.
-                let snapshot = host_registry().lock().ok().and_then(|reg| reg.get(&id).map(|h| (h.tx.subscribe(), h.ring.lock().map(|r| r.clone()).unwrap_or_default(), h.size.lock().map(|s| *s).unwrap_or((80, 24)))));
-                let Some((mut term_rx, replay, (cols, rows))) = snapshot else { continue };
+                        // Snapshot fan-out state without holding the (std) lock across an await.
+                        let snapshot = host_registry().lock().ok().and_then(|reg| reg.get(&id).map(|h| (h.tx.subscribe(), h.ring.lock().map(|r| r.clone()).unwrap_or_default(), h.size.lock().map(|s| *s).unwrap_or((80, 24)))));
+                        let Some((mut term_rx, replay, (cols, rows))) = snapshot else { continue };
+                        if fit { host_take_grid(&id); }
 
-                let _ = out_tx.send(Message::Text(format!("{{\"type\":\"attached\",\"id\":{}}}", serde_json::json!(id)))).await;
-                let _ = out_tx.send(Message::Text(format!("{{\"type\":\"size\",\"cols\":{},\"rows\":{}}}", cols, rows))).await;
-                if !replay.is_empty() { let _ = out_tx.send(Message::Binary(replay)).await; }
+                        let _ = out_tx.send(Message::Text(format!("{{\"type\":\"attached\",\"id\":{}}}", serde_json::json!(id)))).await;
+                        let _ = out_tx.send(Message::Text(format!("{{\"type\":\"size\",\"cols\":{},\"rows\":{}}}", cols, rows))).await;
+                        if !replay.is_empty() { let _ = out_tx.send(Message::Binary(replay)).await; }
 
-                let term_out = out_tx.clone();
-                term_fwd = Some(tokio::spawn(async move {
-                    loop {
-                        match term_rx.recv().await {
-                            Ok(HostMsg::Data(bytes)) => { if term_out.send(Message::Binary(bytes)).await.is_err() { break; } }
-                            Ok(HostMsg::Size(c, r)) => { if term_out.send(Message::Text(format!("{{\"type\":\"size\",\"cols\":{},\"rows\":{}}}", c, r))).await.is_err() { break; } }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        let term_out = out_tx.clone();
+                        term_fwd = Some(tokio::spawn(async move {
+                            loop {
+                                match term_rx.recv().await {
+                                    Ok(HostMsg::Data(bytes)) => { if term_out.send(Message::Binary(bytes)).await.is_err() { break; } }
+                                    Ok(HostMsg::Size(c, r)) => { if term_out.send(Message::Text(format!("{{\"type\":\"size\",\"cols\":{},\"rows\":{}}}", c, r))).await.is_err() { break; } }
+                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                                }
+                            }
+                        }));
+                        attached = Some(id);
+                    }
+                    Some("fit") => {
+                        fit = v.get("value").and_then(|x| x.as_bool()).unwrap_or(false);
+                        if let Some(id) = &attached {
+                            if fit { host_take_grid(id); } else { host_release_grid(id); }
                         }
                     }
-                }));
-                attached = Some(id);
+                    Some("resize") => {
+                        // Honored only while this socket is fitting — the phone drives the PTY.
+                        if !fit { continue; }
+                        let Some(id) = &attached else { continue };
+                        let cols = v.get("cols").and_then(|x| x.as_u64()).unwrap_or(80).clamp(20, 500) as u16;
+                        let rows = v.get("rows").and_then(|x| x.as_u64()).unwrap_or(24).clamp(5, 200) as u16;
+                        host_write_resize(id, cols, rows);
+                        if let Ok(reg) = host_registry().lock() {
+                            if let Some(h) = reg.get(id) {
+                                if let Ok(mut s) = h.size.lock() { *s = (cols, rows); }
+                                let _ = h.tx.send(HostMsg::Size(cols, rows));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
             Message::Close(_) => break,
             _ => {}
         }
     }
+    // Never leave a phone-sized grid behind: hand the PTY back to the desktop on disconnect.
+    if fit { if let Some(id) = &attached { host_release_grid(id); } }
     if let Some(f) = term_fwd.take() { f.abort(); }
     events_fwd.abort();
     writer.abort();
@@ -3852,7 +3968,16 @@ fn stop_hosting_session() -> Result<(), String> {
     if let Some(s) = slot.take() {
         let _ = s.events.send("{\"type\":\"stopped\"}".into());
     }
-    if let Ok(mut reg) = host_registry().lock() { reg.clear(); }
+    if let Ok(mut reg) = host_registry().lock() {
+        // Hand any phone-owned grids back to the desktop before tearing down.
+        for (id, h) in reg.iter() {
+            if h.browser_owns.swap(false, Ordering::Relaxed) {
+                let app = h.app_size.lock().map(|a| *a).unwrap_or((80, 24));
+                host_write_resize(id, app.0, app.1);
+            }
+        }
+        reg.clear();
+    }
     HOSTED_TERMINALS.store(0, Ordering::Relaxed);
     Ok(())
 }
@@ -3958,12 +4083,26 @@ mod host_tests {
             let bin = recv_binary(&mut ws).await;
             assert_eq!(bin, b"hello from pty".to_vec(), "pty bytes stream to viewer");
 
-            // Tab-list update reaches a connected viewer; stop ends the session.
+            // Fit to phone: the viewer takes grid ownership, its resize is recorded, and the
+            // desktop's intent (via resize_terminal while owned) is stashed for hand-back.
+            ws.send(WsMsg::Text("{\"type\":\"fit\",\"value\":true}".into())).await.unwrap();
+            ws.send(WsMsg::Text("{\"type\":\"resize\",\"cols\":40,\"rows\":30}".into())).await.unwrap();
+            wait_until(|| host_registry().lock().unwrap().get("term-a").map(|h| h.browser_owns.load(Ordering::Relaxed) && *h.size.lock().unwrap() == (40, 30)).unwrap_or(false)).await;
+            assert!(true, "phone owns grid at its own size");
+
+            // Turning fit off hands the grid back: ownership drops and size restores to the
+            // desktop's recorded app_size (80x24 default here) with a size echo to the viewer.
+            ws.send(WsMsg::Text("{\"type\":\"fit\",\"value\":false}".into())).await.unwrap();
+            wait_until(|| host_registry().lock().unwrap().get("term-a").map(|h| !h.browser_owns.load(Ordering::Relaxed) && *h.size.lock().unwrap() == (80, 24)).unwrap_or(false)).await;
+            assert!(true, "grid handed back to desktop on fit off");
+
+            // Tab-list update reaches a connected viewer; stop ends the session. (Skip past any
+            // pending size echoes from the fit hand-back above.)
             update_hosted_tabs(vec![HostedTabMeta { id: "term-b".into(), title: "db migration".into(), agent: "codex".into() }]).unwrap();
-            let update = recv_text(&mut ws).await;
-            assert!(update.contains("tabs") && !update.contains("term-a"), "tab update pushed: {update}");
+            let update = recv_text_of(&mut ws, "\"tabs\"").await;
+            assert!(!update.contains("term-a"), "closed tab dropped from update: {update}");
             stop_hosting_session().unwrap();
-            let stopped = recv_text(&mut ws).await;
+            let stopped = recv_text_of(&mut ws, "stopped").await;
             assert!(stopped.contains("stopped"), "stop event pushed: {stopped}");
             println!("PHONE REMOTE PROTOCOL: all assertions passed");
         });
@@ -3977,6 +4116,14 @@ mod host_tests {
             }
         }
     }
+    // Text frames arrive interleaved (size echoes, tabs, etc.) — wait for one containing `needle`.
+    async fn recv_text_of(ws: &mut (impl StreamExt<Item = Result<WsMsg, tokio_tungstenite::tungstenite::Error>> + Unpin), needle: &str) -> String {
+        for _ in 0..50 {
+            let t = recv_text(ws).await;
+            if t.contains(needle) { return t; }
+        }
+        panic!("no text frame containing {needle:?} arrived");
+    }
     async fn recv_binary(ws: &mut (impl StreamExt<Item = Result<WsMsg, tokio_tungstenite::tungstenite::Error>> + Unpin)) -> Vec<u8> {
         loop {
             match tokio::time::timeout(Duration::from_secs(5), ws.next()).await.expect("ws recv timeout").expect("ws stream open").expect("ws frame ok") {
@@ -3984,6 +4131,14 @@ mod host_tests {
                 _ => continue,
             }
         }
+    }
+    // Poll a predicate until true (async state settling across the socket handler + registry).
+    async fn wait_until(mut f: impl FnMut() -> bool) {
+        for _ in 0..100 {
+            if f() { return; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("condition not met within timeout");
     }
     async fn reqwest_get(url: &str) -> String {
         // Tiny HTTP GET over a raw TcpStream — avoids pulling an http client dev-dependency.
