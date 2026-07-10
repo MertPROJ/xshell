@@ -334,6 +334,20 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
 
+    // OSC 52 — CLIs (claude/codex login flows, gh, vim, etc.) use this escape sequence to ask
+    // the terminal to put text on the system clipboard. xterm.js parses it but doesn't act on
+    // it by default (writing to the clipboard is left to the embedder) — without this handler
+    // those "press c to copy the link" prompts print success but never copy anything.
+    term.parser.registerOscHandler(52, (data) => {
+      const payload = data.split(";")[1];
+      if (!payload) return true;
+      try {
+        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+        navigator.clipboard.writeText(new TextDecoder().decode(bytes)).catch(() => {});
+      } catch (_) { /* malformed base64 — ignore */ }
+      return true;
+    });
+
     // WebGL renderer — must be loaded AFTER term.open(), since the addon attaches to the
     // open xterm's DOM. Loading throws if the host can't give us a WebGL context (CI,
     // forced-software-render WebViews); in that case we silently fall back to the default
@@ -362,6 +376,14 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
         navigator.clipboard.readText().then((text) => {
           if (text) invoke("write_terminal", { id: tabRef.current.id, data: text }).catch(() => {});
         }).catch(() => {});
+        return false;
+      }
+      // Ctrl+C: copy the current selection, like every other terminal emulator. Only fall
+      // through to the interrupt signal (^C) when nothing is selected — otherwise xterm's
+      // default always sends ^C and copying a selected output is impossible.
+      if (!ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === "c" && term.hasSelection()) {
+        ev.preventDefault();
+        navigator.clipboard.writeText(term.getSelection()).catch(() => {});
         return false;
       }
       return true;
