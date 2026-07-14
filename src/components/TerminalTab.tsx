@@ -326,7 +326,10 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
     term.loadAddon(new WebLinksAddon((ev, uri) => {
       if (!ev.ctrlKey && !ev.metaKey) return;
       ev.preventDefault();
-      window.open(uri, "_blank", "noopener,noreferrer");
+      // window.open() is blocked/no-ops in the Tauri WebView2 host — every other external
+      // link in the app (SettingsView, UpdateDialog) goes through this Rust-side command
+      // instead, which shells out to the OS's default browser.
+      invoke("open_url", { url: uri }).catch(() => {});
     }));
 
     // Unicode 11 width tables. xterm defaults to Unicode v6, which gets the cell width of
