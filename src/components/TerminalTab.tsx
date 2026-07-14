@@ -320,7 +320,14 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
-    term.loadAddon(new WebLinksAddon());
+    // Ctrl+click (Cmd+click on macOS) to open links — matches Windows Terminal/VS Code/iTerm.
+    // The addon's default handler opens on any click, which fights click-drag selection over
+    // a URL (e.g. selecting one to copy it would launch a browser instead).
+    term.loadAddon(new WebLinksAddon((ev, uri) => {
+      if (!ev.ctrlKey && !ev.metaKey) return;
+      ev.preventDefault();
+      window.open(uri, "_blank", "noopener,noreferrer");
+    }));
 
     // Unicode 11 width tables. xterm defaults to Unicode v6, which gets the cell width of
     // emoji and many wide chars wrong (status-line icons like 📁, box drawing, CJK) — so text
