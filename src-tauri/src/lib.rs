@@ -817,6 +817,22 @@ fn read_image_base64(path: String) -> Result<String, String> {
     Ok(format!("data:{};base64,{}", mime, base64))
 }
 
+// Ctrl+V with an image on the clipboard, or a file dragged in from Explorer — WebView2 (unlike
+// a native app) never gives us a real filesystem path for either one, so we save the bytes to
+// a real temp file and hand back that path instead, since shells/CLIs take a path, not raw bytes.
+#[tauri::command]
+fn save_dropped_file(bytes: Vec<u8>, name: String) -> Result<String, String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let dir = std::env::temp_dir().join("xshell-clipboard");
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_millis();
+    let safe_name: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ')).collect();
+    let safe_name = if safe_name.is_empty() { "file".to_string() } else { safe_name };
+    let path = dir.join(format!("{}-{}", ts, safe_name));
+    fs::write(&path, &bytes).map_err(|e| format!("Failed to write file: {}", e))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 // ── Skills & Plugins ──────────────────────────────────────────────────
 //
 // Claude Code plugin storage layout (discovered on a real machine):
@@ -3264,7 +3280,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState { terminals: Mutex::new(HashMap::new()) })
-        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, read_text_file, reveal_in_explorer, list_dir, search_dir, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_diff, git_stage, git_unstage, git_discard, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, list_cursor_projects, list_opencode_projects, list_antigravity_projects, get_codex_context, get_cursor_context, get_opencode_context, get_antigravity_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal])
+        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, save_dropped_file, read_text_file, reveal_in_explorer, list_dir, search_dir, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_diff, git_stage, git_unstage, git_discard, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, list_cursor_projects, list_opencode_projects, list_antigravity_projects, get_codex_context, get_cursor_context, get_opencode_context, get_antigravity_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

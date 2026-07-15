@@ -373,6 +373,27 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
       } catch (_) { /* WebGL unavailable — DOM renderer takes over automatically */ }
     }
 
+    // Ctrl+V / right-click paste: if the clipboard holds an image (e.g. a screenshot, which
+    // Windows auto-copies on capture), save it to a real file and type its path instead of
+    // raw bytes — shells/CLIs take a file path, not an image blob. Falls back to plain text.
+    const pasteFromClipboard = async () => {
+      try {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imgType = item.types.find((t) => t.startsWith("image/"));
+          if (!imgType) continue;
+          const blob = await item.getType(imgType);
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          const ext = imgType.split("/")[1] || "png";
+          const path = await invoke<string>("save_dropped_file", { bytes: Array.from(bytes), name: `clipboard.${ext}` });
+          invoke("write_terminal", { id: tabRef.current.id, data: /\s/.test(path) ? `"${path}" ` : `${path} ` }).catch(() => {});
+          return;
+        }
+      } catch (_) { /* clipboard.read() unsupported/denied, or no image item — fall back to text */ }
+      const text = await navigator.clipboard.readText().catch(() => "");
+      if (text) invoke("write_terminal", { id: tabRef.current.id, data: text }).catch(() => {});
+    };
+
     // Intercept Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 for zoom, and Ctrl+V for paste
     // (Windows Terminal convention — the terminal would otherwise swallow Ctrl+V as ^V).
     term.attachCustomKeyEventHandler((ev) => {
@@ -383,9 +404,7 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
       // Ctrl+V (but not Ctrl+Shift+V — that stays for xterm's default / bracketed escape).
       if (!ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === "v") {
         ev.preventDefault();
-        navigator.clipboard.readText().then((text) => {
-          if (text) invoke("write_terminal", { id: tabRef.current.id, data: text }).catch(() => {});
-        }).catch(() => {});
+        pasteFromClipboard();
         return false;
       }
       // Ctrl+C: copy the current selection, like every other terminal emulator. Only fall
@@ -458,13 +477,10 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
     // write_terminal too would paste twice, so we only paste manually for raw shells, which
     // don't paste on right-click on their own. We still preventDefault everywhere to suppress
     // the browser context menu.
-    const onContextMenu = async (ev: MouseEvent) => {
+    const onContextMenu = (ev: MouseEvent) => {
       ev.preventDefault();
       if ((tabRef.current.shellMode || "claude") === "claude") return;
-      try {
-        const text = await navigator.clipboard.readText();
-        if (text) invoke("write_terminal", { id: tabRef.current.id, data: text }).catch(() => {});
-      } catch (_) {}
+      pasteFromClipboard();
     };
     containerRef.current.addEventListener("contextmenu", onContextMenu);
 
@@ -1024,13 +1040,28 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
           className="terminal-container"
           ref={containerRef}
           style={{ background: paletteFor(theme, terminalBgColor).background }}
-          onDragOver={(e) => { if (e.dataTransfer.types.includes(DRAG_PATH_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
+          onDragOver={(e) => { if (e.dataTransfer.types.includes(DRAG_PATH_MIME) || e.dataTransfer.types.includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
           onDrop={(e) => {
-            const p = e.dataTransfer.getData(DRAG_PATH_MIME) || e.dataTransfer.getData("text/plain");
-            if (!p) return;
             e.preventDefault();
             // Quote paths with spaces (common on Windows); trailing space lets the user keep typing.
-            invoke("write_terminal", { id: tab.id, data: /\s/.test(p) ? `"${p}" ` : `${p} ` }).catch(() => {});
+            const quote = (p: string) => (/\s/.test(p) ? `"${p}"` : p);
+            if (e.dataTransfer.files.length > 0) {
+              // OS file drop (e.g. an image dragged in from Explorer). WebView2 doesn't expose a
+              // real filesystem path on dropped File objects (that's an Electron-only patch, not
+              // a web standard), so we save the bytes to a real temp file and paste that path —
+              // same trick as the clipboard-image paste above.
+              Promise.all(Array.from(e.dataTransfer.files).map(async (f) => {
+                const bytes = new Uint8Array(await f.arrayBuffer());
+                return invoke<string>("save_dropped_file", { bytes: Array.from(bytes), name: f.name });
+              })).then((paths) => {
+                invoke("write_terminal", { id: tab.id, data: paths.map(quote).join(" ") + " " }).catch(() => {});
+                terminalRef.current?.focus();
+              }).catch(() => {});
+              return;
+            }
+            const p = e.dataTransfer.getData(DRAG_PATH_MIME) || e.dataTransfer.getData("text/plain");
+            if (!p) return;
+            invoke("write_terminal", { id: tab.id, data: `${quote(p)} ` }).catch(() => {});
             terminalRef.current?.focus();
           }}
         >
