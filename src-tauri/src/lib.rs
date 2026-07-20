@@ -817,12 +817,43 @@ fn read_image_base64(path: String) -> Result<String, String> {
     Ok(format!("data:{};base64,{}", mime, base64))
 }
 
+fn decode_base64(s: &str) -> Vec<u8> {
+    let mut val = 0u32;
+    let mut bits = 0u32;
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    for c in s.chars() {
+        let sextet = match c {
+            'A'..='Z' => c as u32 - 'A' as u32,
+            'a'..='z' => c as u32 - 'a' as u32 + 26,
+            '0'..='9' => c as u32 - '0' as u32 + 52,
+            '+' => 62,
+            '/' => 63,
+            '=' => break,
+            _ => continue, // ignore whitespace/newlines
+        };
+        val = (val << 6) | sextet;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((val >> bits) & 0xFF) as u8);
+        }
+    }
+    out
+}
+
+const MAX_DROPPED_FILE_BYTES: usize = 25 * 1024 * 1024; // ponytail: flat cap, revisit if legit >25MB drops show up
+
 // Ctrl+V with an image on the clipboard, or a file dragged in from Explorer — WebView2 (unlike
 // a native app) never gives us a real filesystem path for either one, so we save the bytes to
 // a real temp file and hand back that path instead, since shells/CLIs take a path, not raw bytes.
+// Bytes travel as base64 (not a JSON number array) to keep the IPC payload small.
 #[tauri::command]
-fn save_dropped_file(bytes: Vec<u8>, name: String) -> Result<String, String> {
+fn save_dropped_file(bytes_base64: String, name: String) -> Result<String, String> {
     use std::time::{SystemTime, UNIX_EPOCH};
+    let bytes = decode_base64(&bytes_base64);
+    if bytes.len() > MAX_DROPPED_FILE_BYTES {
+        return Err(format!("File too large ({} bytes, max {})", bytes.len(), MAX_DROPPED_FILE_BYTES));
+    }
     let dir = std::env::temp_dir().join("xshell-clipboard");
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
     let ts = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_millis();
@@ -831,6 +862,21 @@ fn save_dropped_file(bytes: Vec<u8>, name: String) -> Result<String, String> {
     let path = dir.join(format!("{}-{}", ts, safe_name));
     fs::write(&path, &bytes).map_err(|e| format!("Failed to write file: {}", e))?;
     Ok(path.to_string_lossy().to_string())
+}
+
+// Called once at startup — the dir only ever grows otherwise (screenshots, dropped images...).
+fn cleanup_old_dropped_files() {
+    use std::time::{Duration, SystemTime};
+    let dir = std::env::temp_dir().join("xshell-clipboard");
+    let Ok(entries) = fs::read_dir(&dir) else { return };
+    let cutoff = Duration::from_secs(3 * 24 * 60 * 60);
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(modified) = meta.modified() else { continue };
+        if SystemTime::now().duration_since(modified).unwrap_or_default() > cutoff {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 // ── Skills & Plugins ──────────────────────────────────────────────────
@@ -3274,6 +3320,7 @@ async fn detect_agent_binary(binary: String) -> Result<AgentBinaryProbe, String>
 // ── App Setup ──────────────────────────────────────────────────────────
 
 pub fn run() {
+    cleanup_old_dropped_files();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())

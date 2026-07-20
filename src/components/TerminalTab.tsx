@@ -25,6 +25,21 @@ const MAX_FONT_SIZE = 32;
 const BOLD_OFFSET = 200;
 const MAX_FONT_WEIGHT = 900;
 
+// Mirrors MAX_DROPPED_FILE_BYTES in src-tauri/src/lib.rs — checked here too so an
+// oversized clipboard image/drop never even gets read and base64-encoded.
+const MAX_DROPPED_FILE_BYTES = 25 * 1024 * 1024;
+
+// Native FileReader does the base64 encoding off the JS main thread — far cheaper than
+// building a JSON number array (~4x the byte count) or hand-rolling btoa over a big buffer.
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1] ?? "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 // Default xterm bg per app theme. Exported so SettingsView's "Reset" button can fall
 // back to the right shade per theme, and so App.tsx can detect "user is on default"
 // vs "user picked a custom color" when migrating an existing terminalBgColor across themes.
@@ -383,15 +398,18 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
           const imgType = item.types.find((t) => t.startsWith("image/"));
           if (!imgType) continue;
           const blob = await item.getType(imgType);
-          const bytes = new Uint8Array(await blob.arrayBuffer());
+          if (blob.size > MAX_DROPPED_FILE_BYTES) throw new Error("clipboard image too large");
           const ext = imgType.split("/")[1] || "png";
-          const path = await invoke<string>("save_dropped_file", { bytes: Array.from(bytes), name: `clipboard.${ext}` });
+          const path = await invoke<string>("save_dropped_file", { bytesBase64: await blobToBase64(blob), name: `clipboard.${ext}` });
           invoke("write_terminal", { id: tabRef.current.id, data: /\s/.test(path) ? `"${path}" ` : `${path} ` }).catch(() => {});
           return;
         }
-      } catch (_) { /* clipboard.read() unsupported/denied, or no image item — fall back to text */ }
+      } catch (_) { /* clipboard.read() unsupported/denied, no image item, or too large — fall back to text */ }
       const text = await navigator.clipboard.readText().catch(() => "");
-      if (text) invoke("write_terminal", { id: tabRef.current.id, data: text }).catch(() => {});
+      // term.paste() applies bracketed-paste escapes so multi-line text lands as one paste
+      // instead of the shell treating each embedded newline as a submitted Enter keystroke
+      // (which was cropping long pastes down to whatever the last line happened to be).
+      if (text) term.paste(text);
     };
 
     // Intercept Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 for zoom, and Ctrl+V for paste
@@ -1049,10 +1067,13 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
               // OS file drop (e.g. an image dragged in from Explorer). WebView2 doesn't expose a
               // real filesystem path on dropped File objects (that's an Electron-only patch, not
               // a web standard), so we save the bytes to a real temp file and paste that path —
-              // same trick as the clipboard-image paste above.
-              Promise.all(Array.from(e.dataTransfer.files).map(async (f) => {
-                const bytes = new Uint8Array(await f.arrayBuffer());
-                return invoke<string>("save_dropped_file", { bytes: Array.from(bytes), name: f.name });
+              // same trick as the clipboard-image paste above. Only images: for any other file
+              // type this would silently paste the path of a *copy*, and an agent editing that
+              // copy would never touch the file the user actually meant to hand it.
+              const images = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/") && f.size <= MAX_DROPPED_FILE_BYTES);
+              if (images.length === 0) return;
+              Promise.all(images.map(async (f) => {
+                return invoke<string>("save_dropped_file", { bytesBase64: await blobToBase64(f), name: f.name });
               })).then((paths) => {
                 invoke("write_terminal", { id: tab.id, data: paths.map(quote).join(" ") + " " }).catch(() => {});
                 terminalRef.current?.focus();
