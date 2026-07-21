@@ -25,6 +25,21 @@ const MAX_FONT_SIZE = 32;
 const BOLD_OFFSET = 200;
 const MAX_FONT_WEIGHT = 900;
 
+// Mirrors MAX_DROPPED_FILE_BYTES in src-tauri/src/lib.rs — checked here too so an
+// oversized clipboard image/drop never even gets read and base64-encoded.
+const MAX_DROPPED_FILE_BYTES = 25 * 1024 * 1024;
+
+// Native FileReader does the base64 encoding off the JS main thread — far cheaper than
+// building a JSON number array (~4x the byte count) or hand-rolling btoa over a big buffer.
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1] ?? "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 // Default xterm bg per app theme. Exported so SettingsView's "Reset" button can fall
 // back to the right shade per theme, and so App.tsx can detect "user is on default"
 // vs "user picked a custom color" when migrating an existing terminalBgColor across themes.
@@ -320,7 +335,17 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
-    term.loadAddon(new WebLinksAddon());
+    // Ctrl+click (Cmd+click on macOS) to open links — matches Windows Terminal/VS Code/iTerm.
+    // The addon's default handler opens on any click, which fights click-drag selection over
+    // a URL (e.g. selecting one to copy it would launch a browser instead).
+    term.loadAddon(new WebLinksAddon((ev, uri) => {
+      if (!ev.ctrlKey && !ev.metaKey) return;
+      ev.preventDefault();
+      // window.open() is blocked/no-ops in the Tauri WebView2 host — every other external
+      // link in the app (SettingsView, UpdateDialog) goes through this Rust-side command
+      // instead, which shells out to the OS's default browser.
+      invoke("open_url", { url: uri }).catch(() => {});
+    }));
 
     // Unicode 11 width tables. xterm defaults to Unicode v6, which gets the cell width of
     // emoji and many wide chars wrong (status-line icons like 📁, box drawing, CJK) — so text
@@ -333,6 +358,20 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
     term.open(containerRef.current);
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
+
+    // OSC 52 — CLIs (claude/codex login flows, gh, vim, etc.) use this escape sequence to ask
+    // the terminal to put text on the system clipboard. xterm.js parses it but doesn't act on
+    // it by default (writing to the clipboard is left to the embedder) — without this handler
+    // those "press c to copy the link" prompts print success but never copy anything.
+    term.parser.registerOscHandler(52, (data) => {
+      const payload = data.split(";")[1];
+      if (!payload) return true;
+      try {
+        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+        navigator.clipboard.writeText(new TextDecoder().decode(bytes)).catch(() => {});
+      } catch (_) { /* malformed base64 — ignore */ }
+      return true;
+    });
 
     // WebGL renderer — must be loaded AFTER term.open(), since the addon attaches to the
     // open xterm's DOM. Loading throws if the host can't give us a WebGL context (CI,
@@ -349,6 +388,30 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
       } catch (_) { /* WebGL unavailable — DOM renderer takes over automatically */ }
     }
 
+    // Ctrl+V / right-click paste: if the clipboard holds an image (e.g. a screenshot, which
+    // Windows auto-copies on capture), save it to a real file and type its path instead of
+    // raw bytes — shells/CLIs take a file path, not an image blob. Falls back to plain text.
+    const pasteFromClipboard = async () => {
+      try {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imgType = item.types.find((t) => t.startsWith("image/"));
+          if (!imgType) continue;
+          const blob = await item.getType(imgType);
+          if (blob.size > MAX_DROPPED_FILE_BYTES) throw new Error("clipboard image too large");
+          const ext = imgType.split("/")[1] || "png";
+          const path = await invoke<string>("save_dropped_file", { bytesBase64: await blobToBase64(blob), name: `clipboard.${ext}` });
+          invoke("write_terminal", { id: tabRef.current.id, data: /\s/.test(path) ? `"${path}" ` : `${path} ` }).catch(() => {});
+          return;
+        }
+      } catch (_) { /* clipboard.read() unsupported/denied, no image item, or too large — fall back to text */ }
+      const text = await navigator.clipboard.readText().catch(() => "");
+      // term.paste() applies bracketed-paste escapes so multi-line text lands as one paste
+      // instead of the shell treating each embedded newline as a submitted Enter keystroke
+      // (which was cropping long pastes down to whatever the last line happened to be).
+      if (text) term.paste(text);
+    };
+
     // Intercept Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 for zoom, and Ctrl+V for paste
     // (Windows Terminal convention — the terminal would otherwise swallow Ctrl+V as ^V).
     term.attachCustomKeyEventHandler((ev) => {
@@ -359,9 +422,15 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
       // Ctrl+V (but not Ctrl+Shift+V — that stays for xterm's default / bracketed escape).
       if (!ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === "v") {
         ev.preventDefault();
-        navigator.clipboard.readText().then((text) => {
-          if (text) invoke("write_terminal", { id: tabRef.current.id, data: text }).catch(() => {});
-        }).catch(() => {});
+        pasteFromClipboard();
+        return false;
+      }
+      // Ctrl+C: copy the current selection, like every other terminal emulator. Only fall
+      // through to the interrupt signal (^C) when nothing is selected — otherwise xterm's
+      // default always sends ^C and copying a selected output is impossible.
+      if (!ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === "c" && term.hasSelection()) {
+        ev.preventDefault();
+        navigator.clipboard.writeText(term.getSelection()).catch(() => {});
         return false;
       }
       return true;
@@ -426,13 +495,10 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
     // write_terminal too would paste twice, so we only paste manually for raw shells, which
     // don't paste on right-click on their own. We still preventDefault everywhere to suppress
     // the browser context menu.
-    const onContextMenu = async (ev: MouseEvent) => {
+    const onContextMenu = (ev: MouseEvent) => {
       ev.preventDefault();
       if ((tabRef.current.shellMode || "claude") === "claude") return;
-      try {
-        const text = await navigator.clipboard.readText();
-        if (text) invoke("write_terminal", { id: tabRef.current.id, data: text }).catch(() => {});
-      } catch (_) {}
+      pasteFromClipboard();
     };
     containerRef.current.addEventListener("contextmenu", onContextMenu);
 
@@ -992,13 +1058,31 @@ export function TerminalTab({ tab, isActive, gitLazyPolling, gitChangesTree, fil
           className="terminal-container"
           ref={containerRef}
           style={{ background: paletteFor(theme, terminalBgColor).background }}
-          onDragOver={(e) => { if (e.dataTransfer.types.includes(DRAG_PATH_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
+          onDragOver={(e) => { if (e.dataTransfer.types.includes(DRAG_PATH_MIME) || e.dataTransfer.types.includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
           onDrop={(e) => {
-            const p = e.dataTransfer.getData(DRAG_PATH_MIME) || e.dataTransfer.getData("text/plain");
-            if (!p) return;
             e.preventDefault();
             // Quote paths with spaces (common on Windows); trailing space lets the user keep typing.
-            invoke("write_terminal", { id: tab.id, data: /\s/.test(p) ? `"${p}" ` : `${p} ` }).catch(() => {});
+            const quote = (p: string) => (/\s/.test(p) ? `"${p}"` : p);
+            if (e.dataTransfer.files.length > 0) {
+              // OS file drop (e.g. an image dragged in from Explorer). WebView2 doesn't expose a
+              // real filesystem path on dropped File objects (that's an Electron-only patch, not
+              // a web standard), so we save the bytes to a real temp file and paste that path —
+              // same trick as the clipboard-image paste above. Only images: for any other file
+              // type this would silently paste the path of a *copy*, and an agent editing that
+              // copy would never touch the file the user actually meant to hand it.
+              const images = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/") && f.size <= MAX_DROPPED_FILE_BYTES);
+              if (images.length === 0) return;
+              Promise.all(images.map(async (f) => {
+                return invoke<string>("save_dropped_file", { bytesBase64: await blobToBase64(f), name: f.name });
+              })).then((paths) => {
+                invoke("write_terminal", { id: tab.id, data: paths.map(quote).join(" ") + " " }).catch(() => {});
+                terminalRef.current?.focus();
+              }).catch(() => {});
+              return;
+            }
+            const p = e.dataTransfer.getData(DRAG_PATH_MIME) || e.dataTransfer.getData("text/plain");
+            if (!p) return;
+            invoke("write_terminal", { id: tab.id, data: `${quote(p)} ` }).catch(() => {});
             terminalRef.current?.focus();
           }}
         >
