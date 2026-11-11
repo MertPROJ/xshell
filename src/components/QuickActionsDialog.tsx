@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, Terminal as TerminalIcon, Settings, X, PanelLeft, ChevronRight, ChevronLeft, Bot } from "lucide-react";
-import { useProjectImage } from "../hooks/useProjectImage";
+import { useProjectImage, textIcon } from "../hooks/useProjectImage";
 import { ShellIcon } from "./ShellIcon";
 import { AGENT_IDS, AgentIcon, type AgentId } from "../agents";
 import { getAvailableShells } from "../shells";
@@ -51,7 +51,7 @@ function getInitials(name: string): string {
 function ProjectMiniIcon({ iconValue, color, name }: { iconValue?: string; color?: string; name: string }) {
   const imgSrc = useProjectImage(iconValue);
   if (imgSrc) return <div className="ts-project-icon"><img src={imgSrc} className="ts-project-img" alt="" /></div>;
-  return <div className="ts-project-icon" style={{ background: color || undefined }}>{iconValue || getInitials(name || "?")}</div>;
+  return <div className="ts-project-icon" style={{ background: color || undefined }}>{textIcon(iconValue) || getInitials(name || "?")}</div>;
 }
 
 export function QuickActionsDialog({ tabs, activeTabId, projectIcons, pinnedProjects, contextProject, hoveredProjectPath, linkedProjectPath, selectedProjectPath, hasActiveTab, installedAgents, onSelectTab, onCloseTab, onNewChat, onNewShell, onGoHome, onOpenSettings, onToggleSidebar, onClose }: QuickActionsDialogProps) {

@@ -21,3 +21,8 @@ export function useProjectImage(iconValue: string | undefined): string | null {
 
   return dataUrl;
 }
+
+/** The icon value as displayable text, or undefined for image icons (shown as initials when the image can't load). */
+export function textIcon(iconValue: string | undefined): string | undefined {
+  return iconValue && !iconValue.startsWith("img:") ? iconValue : undefined;
+}

@@ -6,7 +6,7 @@ import { ClaudeChatIcon } from "./ClaudeChatIcon";
 import { AGENTS, AgentIcon } from "../agents";
 import { ttProps } from "./Tooltip";
 import { timeAgo, processSessions } from "../utils";
-import { useProjectImage } from "../hooks/useProjectImage";
+import { useProjectImage, textIcon } from "../hooks/useProjectImage";
 import logo from "../assets/logo.png";
 import type { ProjectInfo, ProjectSettings, SessionFolder, SessionInfo } from "../types";
 
@@ -607,8 +607,8 @@ function ProjectIcon({ project, projectIcons, size }: { project: ProjectInfo; pr
   if (imgSrc) return <img src={imgSrc} style={{ width: size, height: size, borderRadius: radius, objectFit: "cover", flexShrink: 0 }} alt="" />;
   const bg = settings?.color || "var(--accent-terracotta)";
   return (
-    <div style={{ width: size, height: size, borderRadius: radius, background: bg, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-primary)", fontSize: iconValue ? size * 0.5 : Math.max(7, size * 0.35), fontWeight: 600, flexShrink: 0 }}>
-      {iconValue || displayName.slice(0, 2).toUpperCase()}
+    <div style={{ width: size, height: size, borderRadius: radius, background: bg, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-primary)", fontSize: textIcon(iconValue) ? size * 0.5 : Math.max(7, size * 0.35), fontWeight: 600, flexShrink: 0 }}>
+      {textIcon(iconValue) || displayName.slice(0, 2).toUpperCase()}
     </div>
   );
 }

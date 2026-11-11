@@ -12,7 +12,7 @@ import { Layers } from "lucide-react";
 import { useDragReorder } from "../hooks/useDragReorder";
 import { QuickActionsDialog } from "./QuickActionsDialog";
 import { ClaudeChatIcon } from "./ClaudeChatIcon";
-import { useProjectImage } from "../hooks/useProjectImage";
+import { useProjectImage, textIcon } from "../hooks/useProjectImage";
 
 function tabInitials(name: string): string {
   const parts = name.replace(/[^a-zA-Z0-9\s\-_.]/g, "").split(/[\s\-_.]+/).filter(Boolean);
@@ -27,7 +27,7 @@ function TabProjectIcon({ iconValue, color, name, linked }: { iconValue?: string
   const imgSrc = useProjectImage(iconValue);
   const cls = `tab-project-icon ${linked ? "tab-project-icon-linked" : ""}`;
   if (imgSrc) return <div className={cls}><img src={imgSrc} className="tab-project-img" alt="" /></div>;
-  return <div className={cls} style={color ? { background: color } : undefined}>{iconValue || tabInitials(name)}</div>;
+  return <div className={cls} style={color ? { background: color } : undefined}>{textIcon(iconValue) || tabInitials(name)}</div>;
 }
 
 // Tab bar shows tabs and groups interleaved. A group is one "entry" representing

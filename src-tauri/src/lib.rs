@@ -793,6 +793,30 @@ fn read_text_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))
 }
 
+/// Copies a user-picked project icon into the app's data dir and returns the new path.
+/// Icons referenced in place (e.g. ~/Downloads) break when the app is launched from the
+/// Dock: macOS privacy protection (TCC) then attributes file access to xshell itself, which
+/// has no Downloads/Desktop/Documents grant, so the read fails. The file dialog grants
+/// one-time access to the picked file, so copying it right away keeps it readable.
+#[tauri::command]
+fn import_project_image(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    use std::hash::{Hash, Hasher};
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("project-icons");
+    let src = std::path::Path::new(&path);
+    if src.starts_with(&dir) { return Ok(path); }
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create icon dir: {}", e))?;
+    let data = fs::read(src).map_err(|e| format!("Failed to read image: {}", e))?;
+    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("png").to_lowercase();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut h);
+    let dest = dir.join(format!("{:016x}.{}", h.finish(), ext));
+    if !dest.exists() {
+        fs::write(&dest, &data).map_err(|e| format!("Failed to store image: {}", e))?;
+    }
+    Ok(dest.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn read_image_base64(path: String) -> Result<String, String> {
     let data = fs::read(&path).map_err(|e| format!("Failed to read image: {}", e))?;
@@ -3324,7 +3348,75 @@ async fn detect_agent_binary(binary: String) -> Result<AgentBinaryProbe, String>
 
 // ── App Setup ──────────────────────────────────────────────────────────
 
+/// Apps launched from Finder/Dock/Spotlight inherit launchd's minimal PATH
+/// (/usr/bin:/bin:/usr/sbin:/sbin), so agents installed in ~/.local/bin, Homebrew, etc.
+/// aren't found. Ask the user's login shell for its PATH once at startup and adopt it.
+#[cfg(target_os = "macos")]
+fn import_login_shell_path() {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into());
+    const MARK: &str = "__XSHELL_PATH__";
+    let mut child = match Command::new(&shell)
+        .args(["-l", "-i", "-c", &format!("printf '{m}%s{m}' \"$PATH\"", m = MARK)])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    // Don't let a slow/hanging rc file block app startup.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            _ => { let _ = child.kill(); let _ = child.wait(); return; }
+        }
+    }
+    let mut out = String::new();
+    if let Some(mut so) = child.stdout.take() { let _ = so.read_to_string(&mut out); }
+    let mut parts = out.split(MARK);
+    if let (Some(_), Some(path)) = (parts.next(), parts.next()) {
+        if !path.trim().is_empty() {
+            std::env::set_var("PATH", path);
+        }
+    }
+}
+
+/// A Dock/Finder launch also starts with cwd "/" and no locale variables (Terminal.app sets
+/// LANG itself). Without a UTF-8 locale, shells and TUIs mishandle multibyte input, so
+/// e.g. Backspace after an umlaut deletes only half a character. Derive LANG from the macOS
+/// region setting and start in $HOME, matching a launch from a terminal.
+#[cfg(target_os = "macos")]
+fn normalize_gui_launch_env() {
+    let has_locale = ["LC_ALL", "LC_CTYPE", "LANG"].iter().any(|k| std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false));
+    if !has_locale {
+        let locale = std::process::Command::new("/usr/bin/defaults")
+            .args(["read", "-g", "AppleLocale"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().split('@').next().unwrap_or("").to_string())
+            .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or_else(|| "en_US".to_string());
+        std::env::set_var("LANG", format!("{}.UTF-8", locale));
+    }
+    if std::env::current_dir().map(|d| d == std::path::Path::new("/")).unwrap_or(true) {
+        if let Some(home) = dirs::home_dir() { let _ = std::env::set_current_dir(home); }
+    }
+}
+
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    {
+        import_login_shell_path();
+        normalize_gui_launch_env();
+    }
     cleanup_old_dropped_files();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -3349,7 +3441,7 @@ pub fn run() {
                 .build()?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, save_dropped_file, read_text_file, reveal_in_explorer, list_dir, search_dir, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_diff, git_stage, git_unstage, git_discard, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, list_cursor_projects, list_opencode_projects, list_antigravity_projects, get_codex_context, get_cursor_context, get_opencode_context, get_antigravity_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal])
+        .invoke_handler(tauri::generate_handler![list_claude_projects, get_sessions, get_all_recent_sessions, get_session_messages, read_image_base64, import_project_image, save_dropped_file, read_text_file, reveal_in_explorer, list_dir, search_dir, open_url, get_username, get_home_dir, get_project_skills, get_project_memories, get_git_status, get_git_log, git_diff, git_stage, git_unstage, git_discard, list_git_branches, git_checkout, list_project_session_ids, detect_session_branch, probe_statusline_setup, get_global_rate_limits, detect_agent_binary, list_codex_projects, list_cursor_projects, list_opencode_projects, list_antigravity_projects, get_codex_context, get_cursor_context, get_opencode_context, get_antigravity_context, get_claude_cost_summary, get_codex_usage, spawn_terminal, write_terminal, resize_terminal, close_terminal])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
