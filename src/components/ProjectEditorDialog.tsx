@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { X, Image as ImageIcon } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { useProjectImage } from "../hooks/useProjectImage";
 import { ColorPicker } from "./ColorPicker";
 import type { ProjectInfo, ProjectSettings } from "../types";
@@ -90,7 +91,12 @@ export function ProjectEditorDialog({ project, settings, onSave, onClose }: Prop
   const handlePickImage = async () => {
     try {
       const selected = await openDialog({ multiple: false, title: "Choose an image", filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "svg", "webp", "ico"] }] });
-      if (selected && typeof selected === "string") setImagePath(selected);
+      if (selected && typeof selected === "string") {
+        // Keep a copy in the app data dir so the icon stays readable regardless of how the
+        // app was launched (see import_project_image). Fall back to the original path.
+        const stored = await invoke<string>("import_project_image", { path: selected }).catch(() => selected);
+        setImagePath(stored);
+      }
     } catch (_) {}
   };
 

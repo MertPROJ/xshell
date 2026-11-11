@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Plus, Folder as FolderIcon } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { useProjectImage } from "../hooks/useProjectImage";
+import { useProjectImage, textIcon } from "../hooks/useProjectImage";
 import { FolderEditorDialog } from "./FolderEditorDialog";
 import { RateLimitIndicator } from "./RateLimitIndicator";
 import logo from "../assets/logo.png";
@@ -40,7 +40,7 @@ function ProjectSidebarIcon({ iconValue, color, name, highlighted, mini }: { ico
   if (imgSrc) return <div className={`ds-icon ds-project ${mini ? "ds-icon-mini" : ""}`}><img src={imgSrc} className="ds-project-img" alt="" /></div>;
   // Custom color wins — selection uses terracotta only when the project has no custom color set.
   const bg = color || (highlighted ? "var(--accent-terracotta)" : undefined);
-  return <div className={`ds-icon ds-project ${mini ? "ds-icon-mini" : ""}`} style={{ background: bg }}>{iconValue || getInitials(name)}</div>;
+  return <div className={`ds-icon ds-project ${mini ? "ds-icon-mini" : ""}`} style={{ background: bg }}>{textIcon(iconValue) || getInitials(name)}</div>;
 }
 
 // Context menu for a project (mirrors the original).
